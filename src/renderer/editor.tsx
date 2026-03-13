@@ -30,13 +30,15 @@ function Editor() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const unsubscribe = ipcRenderer.on('load-image', (_, path: string) => {
+    const handler = (_: any, path: string) => {
       setImagePath(path);
       loadImage(path);
-    });
+    };
+
+    ipcRenderer.on('load-image', handler);
 
     return () => {
-      unsubscribe.removeListener();
+      ipcRenderer.removeListener('load-image', handler);
     };
   }, []);
 
@@ -47,6 +49,18 @@ function Editor() {
   }, [image, elements]);
 
   function loadImage(path: string) {
+    // Корректно подготавливаем локальный путь к файлу для Electron
+    let src = path;
+    if (!path.startsWith('file://')) {
+      const normalized = path.replace(/\\/g, '/');
+      // Для путей вида C:/... нужен формат file:///C:/...
+      if (/^[a-zA-Z]:/.test(normalized)) {
+        src = `file:///${normalized}`;
+      } else {
+        src = `file://${normalized}`;
+      }
+    }
+
     const img = new Image();
     img.onload = () => {
       setImage(img);
@@ -55,7 +69,10 @@ function Editor() {
         canvasRef.current.height = img.height;
       }
     };
-    img.src = path;
+    img.onerror = (e) => {
+      console.error('[EDITOR] Image load error', { src, path, event: e });
+    };
+    img.src = src;
   }
 
   function draw() {
@@ -161,7 +178,7 @@ function Editor() {
             ctx.putImageData(imageData, x, y);
             // Применяем размытие через фильтр
             ctx.filter = 'blur(10px)';
-            ctx.drawImage(canvas, x, y, width, height, x, y, width, height);
+            ctx.drawImage(ctx.canvas, x, y, width, height, x, y, width, height);
             ctx.filter = 'none';
           }
         }
@@ -271,18 +288,25 @@ function Editor() {
     const canvas = canvasRef.current;
     if (!canvas || !imagePath) return;
 
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] [EDITOR] 💾 Saving image...`);
+
     try {
       // Отправляем в main процесс для сохранения
       const dataUrl = canvas.toDataURL('image/png');
       const buffer = Buffer.from(dataUrl.replace(/^data:image\/png;base64,/, ''), 'base64');
+      console.log(`[${timestamp}] [EDITOR] 📦 Buffer size:`, buffer.length, 'bytes');
+      
       const result = await ipcRenderer.invoke('save-edited-image', buffer);
+      console.log(`[${timestamp}] [EDITOR] 📥 Save result:`, result);
 
       if (result?.success) {
+        console.log(`[${timestamp}] [EDITOR] ✅ Image saved successfully`);
         // Закрываем редактор через IPC
         ipcRenderer.send('close-editor-window');
       }
     } catch (error) {
-      console.error('Error saving image:', error);
+      console.error(`[${timestamp}] [EDITOR] ❌ Save error:`, error);
     }
   }
 
@@ -290,19 +314,24 @@ function Editor() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] [EDITOR] 💾 Save As...`);
+
     try {
       const dataUrl = canvas.toDataURL('image/png');
       const buffer = Buffer.from(dataUrl.replace(/^data:image\/png;base64,/, ''), 'base64');
 
       // Отправляем в main процесс для сохранения
       const result = await ipcRenderer.invoke('save-edited-image', buffer);
+      console.log(`[${timestamp}] [EDITOR] 📥 Save As result:`, result);
 
       if (result?.success) {
+        console.log(`[${timestamp}] [EDITOR] ✅ Image saved successfully`);
         // Закрываем редактор через IPC
         ipcRenderer.send('close-editor-window');
       }
     } catch (error) {
-      console.error('Error saving image:', error);
+      console.error(`[${timestamp}] [EDITOR] ❌ Save As error:`, error);
     }
   }
 
@@ -310,17 +339,78 @@ function Editor() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] [EDITOR] 📋 Copying to clipboard...`);
+
     try {
       // Конвертируем canvas в буфер и отправляем в main процесс для копирования
       const dataUrl = canvas.toDataURL('image/png');
       const buffer = Buffer.from(dataUrl.replace(/^data:image\/png;base64,/, ''), 'base64');
-      
+      console.log(`[${timestamp}] [EDITOR] 📦 Buffer size:`, buffer.length, 'bytes');
+
       // Копируем изображение через IPC
       await ipcRenderer.invoke('copy-image-to-clipboard', buffer);
-      console.log('Image copied to clipboard');
+      console.log(`[${timestamp}] [EDITOR] ✅ Image copied to clipboard`);
     } catch (error) {
-      console.error('Error copying to clipboard:', error);
+      console.error(`[${timestamp}] [EDITOR] ❌ Copy error:`, error);
       alert('Ошибка при копировании в буфер обмена');
+    }
+  }
+
+  async function handleUploadToServer() {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] [EDITOR] 📤 Starting upload to server`);
+
+    try {
+      console.log(`[${timestamp}] [EDITOR] 🖼️ Converting canvas to data URL...`);
+      const dataUrl = canvas.toDataURL('image/png');
+      console.log(`[${timestamp}] [EDITOR] 🔄 Converting data URL to buffer...`);
+      const buffer = Buffer.from(dataUrl.replace(/^data:image\/png;base64,/, ''), 'base64');
+      console.log(`[${timestamp}] [EDITOR] 📦 Image buffer size:`, buffer.length, 'bytes');
+
+      // Отправляем в main процесс для загрузки на сервер
+      console.log(`[${timestamp}] [EDITOR] 📡 Sending to main process...`);
+      console.log(`[${timestamp}] [EDITOR] 📊 Buffer details:`, {
+        length: buffer.length,
+        type: typeof buffer,
+        isBuffer: Buffer.isBuffer(buffer)
+      });
+      console.log(`[${timestamp}] [EDITOR] 🚀 Initiating IPC call to upload-image-to-server...`);
+      const result = await ipcRenderer.invoke('upload-image-to-server', buffer);
+      console.log(`[${timestamp}] [EDITOR] ✅ IPC call completed, received response:`, result);
+
+      if (result?.success) {
+        console.log(`[${timestamp}] [EDITOR] ✅ Uploaded to server:`, result.url);
+        // Копируем ссылку в буфер
+        console.log(`[${timestamp}] [EDITOR] 📋 Copying URL to clipboard...`);
+        try {
+          await navigator.clipboard.writeText(result.url);
+          console.log(`[${timestamp}] [EDITOR] ✅ URL copied to clipboard`);
+        } catch (clipboardError: any) {
+          console.error(`[${timestamp}] [EDITOR] ❌ Clipboard error:`, {
+            message: clipboardError.message,
+            stack: clipboardError.stack
+          });
+        }
+        alert(`Загружено на сервер!\nСсылка скопирована в буфер:\n${result.url}`);
+        // Закрываем редактор
+        console.log(`[${timestamp}] [EDITOR] 🚪 Closing editor window...`);
+        ipcRenderer.send('close-editor-window');
+      } else {
+        console.error(`[${timestamp}] [EDITOR] ❌ Server error:`, result?.error);
+        alert(`Ошибка загрузки: ${result?.error || 'Неизвестная ошибка'}`);
+      }
+    } catch (error: any) {
+      console.error(`[${timestamp}] [EDITOR] ❌ Upload error:`, {
+        message: error.message,
+        stack: error.stack,
+        name: error.name,
+        source: 'handleUploadToServer'
+      });
+      alert('Ошибка при загрузке на сервер');
     }
   }
 
@@ -419,6 +509,9 @@ function Editor() {
         <div className="tool-group actions">
           <button className="btn-secondary" onClick={handleCopy}>
             📋 Копировать
+          </button>
+          <button className="btn-secondary" onClick={handleUploadToServer}>
+            ☁️ На сервер
           </button>
           <button className="btn-primary" onClick={handleSave}>
             💾 Сохранить
