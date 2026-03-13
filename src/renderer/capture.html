@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Выбор области</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; cursor: crosshair; background: transparent; }
+    #overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.3);
+      z-index: 1;
+    }
+    #selection {
+      position: absolute;
+      border: 2px dashed #fff;
+      background: rgba(255, 255, 255, 0.1);
+      z-index: 2;
+      display: none;
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+    }
+    #instructions {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.8);
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 8px;
+      z-index: 3;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay"></div>
+  <div id="selection"></div>
+  <div id="instructions">Выделите область для скриншота. Отпустите для захвата, Esc для отмены</div>
+  <script>
+    const { ipcRenderer } = require('electron');
+
+    let isSelecting = false;
+    let startX, startY;
+    const selection = document.getElementById('selection');
+    const overlay = document.getElementById('overlay');
+
+    // Используем clientX/clientY для координат внутри окна
+    overlay.addEventListener('mousedown', (e) => {
+      isSelecting = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      selection.style.display = 'block';
+      selection.style.left = startX + 'px';
+      selection.style.top = startY + 'px';
+      selection.style.width = '0px';
+      selection.style.height = '0px';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isSelecting) return;
+
+      const currentX = e.clientX;
+      const currentY = e.clientY;
+
+      const left = Math.min(startX, currentX);
+      const top = Math.min(startY, currentY);
+      const width = Math.abs(currentX - startX);
+      const height = Math.abs(currentY - startY);
+
+      selection.style.left = left + 'px';
+      selection.style.top = top + 'px';
+      selection.style.width = width + 'px';
+      selection.style.height = height + 'px';
+    });
+
+    document.addEventListener('mouseup', async (e) => {
+      if (!isSelecting) return;
+      isSelecting = false;
+
+      const width = parseInt(selection.style.width);
+      const height = parseInt(selection.style.height);
+
+      console.log('Mouse up, selection:', width, 'x', height);
+
+      if (width > 10 && height > 10) {
+        // Получаем координаты относительно окна (clientX/clientY)
+        const clientBounds = {
+          x: parseInt(selection.style.left),
+          y: parseInt(selection.style.top),
+          width: width,
+          height: height,
+        };
+
+        // Получаем devicePixelRatio для правильного масштабирования
+        const pixelRatio = window.devicePixelRatio || 1;
+        console.log('Capturing area (client coords):', clientBounds, 'pixelRatio:', pixelRatio);
+
+        try {
+          // Захват области через main процесс с client координатами и pixelRatio
+          const imageData = await ipcRenderer.invoke('capture-screen-area', {
+            type: 'client',
+            ...clientBounds,
+            pixelRatio
+          });
+          console.log('Screenshot captured, data length:', imageData ? imageData.length : 'null');
+
+          if (imageData) {
+            // Сохраняем и открываем редактор
+            const result = await ipcRenderer.invoke('capture-area-done', imageData, clientBounds);
+            console.log('Save result:', result);
+            // Закрываем окно после успешного сохранения
+            ipcRenderer.send('close-capture-window');
+          }
+        } catch (error) {
+          console.error('Error capturing area:', error);
+        }
+      } else {
+        // Если область слишком маленькая, просто закрываем окно
+        ipcRenderer.send('close-capture-window');
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        ipcRenderer.send('close-capture-window');
+      }
+    });
+  </script>
+</body>
+</html>

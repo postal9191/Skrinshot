@@ -1,0 +1,11 @@
+node_modules
+release
+*.exe
+*.dmg
+*.msi
+*.AppImage
+dist
+out
+build
+.DS_Store
+Thumbs.db
