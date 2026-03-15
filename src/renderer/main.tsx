@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { History } from './pages/History';
 import { Settings } from './pages/Settings';
@@ -11,12 +11,13 @@ function App() {
   const [currentPage, setCurrentPage] = useState<Page>('history');
 
   useEffect(() => {
-    const unsubscribe = ipcRenderer.on('navigate', (_, page: string) => {
+    const handler = (_: any, page: string) => {
       setCurrentPage(page as Page);
-    });
+    };
+    ipcRenderer.on('navigate', handler);
 
     return () => {
-      unsubscribe.removeListener();
+      ipcRenderer.removeListener('navigate', handler);
     };
   }, []);
 

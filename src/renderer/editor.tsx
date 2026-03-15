@@ -3,7 +3,6 @@ import ReactDOM from 'react-dom/client';
 import './styles/editor.css';
 
 const { ipcRenderer } = require('electron');
-const fs = require('fs');
 
 type Tool = 'select' | 'arrow' | 'line' | 'rectangle' | 'ellipse' | 'text' | 'marker' | 'blur';
 
@@ -36,6 +35,14 @@ function Editor() {
     };
 
     ipcRenderer.on('load-image', handler);
+
+    // Запрашиваем изображение сами — на случай если событие пришло до регистрации слушателя
+    ipcRenderer.invoke('get-pending-image').then((path: string | null) => {
+      if (path) {
+        setImagePath(path);
+        loadImage(path);
+      }
+    });
 
     return () => {
       ipcRenderer.removeListener('load-image', handler);
@@ -307,31 +314,6 @@ function Editor() {
       }
     } catch (error) {
       console.error(`[${timestamp}] [EDITOR] ❌ Save error:`, error);
-    }
-  }
-
-  async function handleSaveAs() {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] [EDITOR] 💾 Save As...`);
-
-    try {
-      const dataUrl = canvas.toDataURL('image/png');
-      const buffer = Buffer.from(dataUrl.replace(/^data:image\/png;base64,/, ''), 'base64');
-
-      // Отправляем в main процесс для сохранения
-      const result = await ipcRenderer.invoke('save-edited-image', buffer);
-      console.log(`[${timestamp}] [EDITOR] 📥 Save As result:`, result);
-
-      if (result?.success) {
-        console.log(`[${timestamp}] [EDITOR] ✅ Image saved successfully`);
-        // Закрываем редактор через IPC
-        ipcRenderer.send('close-editor-window');
-      }
-    } catch (error) {
-      console.error(`[${timestamp}] [EDITOR] ❌ Save As error:`, error);
     }
   }
 

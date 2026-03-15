@@ -5,6 +5,7 @@ release
 *.msi
 *.AppImage
 dist
+dist-build
 out
 build
 .DS_Store

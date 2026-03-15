@@ -56,6 +56,7 @@ let captureWindow: BrowserWindow | null = null;
 let editorWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isRecording = false;
+let pendingEditorImagePath: string | null = null;
 
 // Установка default значений
 const initializeSettings = () => {
@@ -154,6 +155,8 @@ function createCaptureWindow() {
 }
 
 function createEditorWindow(imagePath?: string) {
+  pendingEditorImagePath = imagePath || null;
+
   editorWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -175,14 +178,9 @@ function createEditorWindow(imagePath?: string) {
     }
   }
 
-  if (imagePath) {
-    editorWindow.webContents.on('did-finish-load', () => {
-      editorWindow?.webContents.send('load-image', imagePath);
-    });
-  }
-
   editorWindow.on('closed', () => {
     editorWindow = null;
+    pendingEditorImagePath = null;
   });
 }
 
@@ -503,6 +501,12 @@ function registerHotkeys() {
 }
 
 // IPC handlers
+ipcMain.handle('get-pending-image', () => {
+  const path = pendingEditorImagePath;
+  pendingEditorImagePath = null;
+  return path;
+});
+
 ipcMain.handle('get-settings', () => {
   log('MAIN', '[get-settings] Getting settings');
   return store.get('settings');

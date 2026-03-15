@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 const { ipcRenderer } = require('electron');
 
@@ -119,7 +119,7 @@ export function History() {
                     📁
                   </button>
                   {item.url && (
-                    <button onClick={() => copyUrl(item.url)} title="Копировать ссылку">
+                    <button onClick={() => copyUrl(item.url!)} title="Копировать ссылку">
                       🔗
                     </button>
                   )}
