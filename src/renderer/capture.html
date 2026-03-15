@@ -2,103 +2,539 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Выбор области</title>
-  <link rel="stylesheet" href="./styles/capture.css">
+  <title>Захват области</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: transparent;
+      user-select: none;
+    }
+
+    #selectionCanvas {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw;
+      height: 100vh;
+      cursor: crosshair;
+      z-index: 10;
+    }
+
+    #editor {
+      display: none;
+      position: fixed;
+      z-index: 20;
+    }
+
+    #canvasWrapper {
+      position: relative;
+      outline: 2px solid #4a90d9;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.4), 0 8px 32px rgba(0,0,0,0.5);
+    }
+
+    #imageCanvas,
+    #drawCanvas {
+      position: absolute;
+      top: 0; left: 0;
+      display: block;
+    }
+
+    #toolbar {
+      position: absolute;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      background: #1e1e1e;
+      border-radius: 10px;
+      padding: 6px 10px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+      white-space: nowrap;
+    }
+
+    #actions {
+      position: absolute;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      background: #1e1e1e;
+      border-radius: 10px;
+      padding: 6px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+    }
+
+    .tool-btn {
+      width: 32px;
+      height: 32px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: white;
+      font-size: 15px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s;
+    }
+    .tool-btn:hover  { background: rgba(255,255,255,0.12); }
+    .tool-btn.active { background: #4a90d9; }
+
+    .sep {
+      width: 1px;
+      height: 22px;
+      background: rgba(255,255,255,0.18);
+      margin: 0 4px;
+      flex-shrink: 0;
+    }
+
+    #colorBtn {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.35);
+      cursor: pointer;
+      padding: 0;
+      overflow: hidden;
+      background: none;
+      flex-shrink: 0;
+    }
+
+    #lineWidthRange {
+      width: 56px;
+      accent-color: #4a90d9;
+    }
+
+    .action-btn {
+      width: 34px;
+      height: 34px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: white;
+      font-size: 17px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s;
+    }
+    .action-btn:hover         { background: rgba(255,255,255,0.12); }
+    .action-btn.primary       { background: #4a90d9; }
+    .action-btn.primary:hover { background: #357abd; }
+    .action-btn.danger:hover  { background: #c53030; }
+
+    .action-sep {
+      height: 1px;
+      background: rgba(255,255,255,0.18);
+      margin: 2px 0;
+    }
+  </style>
 </head>
 <body>
-  <div id="overlay"></div>
-  <div id="selection"></div>
-  <div id="instructions">Выделите область для скриншота. Отпустите для захвата, Esc для отмены</div>
-  <script>
-    const { ipcRenderer } = require('electron');
 
-    let isSelecting = false;
-    let startX, startY;
-    const selection = document.getElementById('selection');
-    const overlay = document.getElementById('overlay');
+<canvas id="selectionCanvas"></canvas>
 
-    // Используем clientX/clientY для координат внутри окна
-    overlay.addEventListener('mousedown', (e) => {
-      isSelecting = true;
-      startX = e.clientX;
-      startY = e.clientY;
-      selection.style.display = 'block';
-      selection.style.left = startX + 'px';
-      selection.style.top = startY + 'px';
-      selection.style.width = '0px';
-      selection.style.height = '0px';
+<div id="editor">
+  <div id="canvasWrapper">
+    <canvas id="imageCanvas"></canvas>
+    <canvas id="drawCanvas"></canvas>
+  </div>
+
+  <div id="toolbar">
+    <button class="tool-btn active" data-tool="arrow"     title="Стрелка">&#10140;</button>
+    <button class="tool-btn"        data-tool="line"      title="Линия">&#9585;</button>
+    <button class="tool-btn"        data-tool="pencil"    title="Карандаш">&#9998;</button>
+    <button class="tool-btn"        data-tool="marker"    title="Маркер">&#9646;</button>
+    <button class="tool-btn"        data-tool="rectangle" title="Прямоугольник">&#9645;</button>
+    <button class="tool-btn"        data-tool="ellipse"   title="Эллипс">&#9711;</button>
+    <button class="tool-btn"        data-tool="text"      title="Текст" style="font-weight:bold;font-size:14px">T</button>
+    <div class="sep"></div>
+    <input type="color" id="colorBtn"       value="#ff0000" title="Цвет">
+    <input type="range" id="lineWidthRange" min="1" max="12" value="3" title="Толщина">
+    <div class="sep"></div>
+    <button class="tool-btn" id="undoBtn" title="Отменить (Ctrl+Z)">&#8617;</button>
+  </div>
+
+  <div id="actions">
+    <button class="action-btn primary" id="saveBtn"   title="Сохранить">&#128190;</button>
+    <button class="action-btn"         id="copyBtn"   title="Копировать в буфер">&#9108;</button>
+    <button class="action-btn"         id="uploadBtn" title="На сервер">&#8679;</button>
+    <div class="action-sep"></div>
+    <button class="action-btn danger"  id="closeBtn"  title="Закрыть (Esc)">&#10005;</button>
+  </div>
+</div>
+
+<script>
+  const { ipcRenderer } = require('electron');
+
+  // ── Фаза 1: выделение ────────────────────────────────────────────────────
+
+  const selCanvas = document.getElementById('selectionCanvas');
+  const selCtx    = selCanvas.getContext('2d');
+
+  let phase     = 1;
+  let selecting = false;
+  let sx = 0, sy = 0;
+
+  // ── Проверка fullscreen при загрузке ─────────────────────────────────────
+
+  (async function checkFullscreen() {
+    var fsPath = await ipcRenderer.invoke('get-pending-fullscreen');
+    if (!fsPath) return;
+
+    var normalized = fsPath.replace(/\\/g, '/');
+    var fileUrl = /^[a-zA-Z]:/.test(normalized) ? 'file:///' + normalized : 'file://' + normalized;
+
+    phase = 2;
+    selCanvas.style.display = 'none';
+
+    startEditor(fileUrl, {
+      x: 0, y: 0,
+      w: window.innerWidth,
+      h: window.innerHeight
+    });
+  })();
+
+  function initOverlay() {
+    selCanvas.width  = window.innerWidth;
+    selCanvas.height = window.innerHeight;
+    drawOverlay(null);
+  }
+
+  function drawOverlay(rect) {
+    selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
+    selCtx.fillStyle = 'rgba(0,0,0,0.42)';
+    selCtx.fillRect(0, 0, selCanvas.width, selCanvas.height);
+    if (!rect) return;
+
+    selCtx.clearRect(rect.x, rect.y, rect.w, rect.h);
+
+    selCtx.strokeStyle = '#4a90d9';
+    selCtx.lineWidth   = 1.5;
+    selCtx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+
+    var label = Math.round(rect.w) + ' x ' + Math.round(rect.h);
+    var lx = rect.x + 4;
+    var ly = rect.y > 22 ? rect.y - 6 : rect.y + rect.h + 16;
+    selCtx.fillStyle = '#4a90d9';
+    selCtx.fillRect(lx - 3, ly - 14, label.length * 7 + 6, 18);
+    selCtx.fillStyle = 'white';
+    selCtx.font = '12px sans-serif';
+    selCtx.fillText(label, lx, ly);
+  }
+
+  function drawDimBackground(rx, ry, rw, rh) {
+    selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
+    selCtx.fillStyle = 'rgba(0,0,0,0.35)';
+    // Рисуем 4 полосы вокруг выделения (сверху, снизу, слева, справа)
+    selCtx.fillRect(0, 0, selCanvas.width, ry);                          // сверху
+    selCtx.fillRect(0, ry + rh, selCanvas.width, selCanvas.height - ry - rh); // снизу
+    selCtx.fillRect(0, ry, rx, rh);                                      // слева
+    selCtx.fillRect(rx + rw, ry, selCanvas.width - rx - rw, rh);         // справа
+  }
+
+  initOverlay();
+
+  selCanvas.addEventListener('mousedown', function(e) {
+    if (phase !== 1) return;
+    selecting = true;
+    sx = e.clientX;
+    sy = e.clientY;
+  });
+
+  document.addEventListener('mousemove', function(e) {
+    if (phase !== 1 || !selecting) return;
+    drawOverlay({
+      x: Math.min(sx, e.clientX), y: Math.min(sy, e.clientY),
+      w: Math.abs(e.clientX - sx), h: Math.abs(e.clientY - sy)
+    });
+  });
+
+  document.addEventListener('mouseup', async function(e) {
+    if (phase !== 1 || !selecting) return;
+    selecting = false;
+
+    var x = Math.min(sx, e.clientX);
+    var y = Math.min(sy, e.clientY);
+    var w = Math.abs(e.clientX - sx);
+    var h = Math.abs(e.clientY - sy);
+
+    if (w < 10 || h < 10) { ipcRenderer.send('close-capture-window'); return; }
+
+    var pixelRatio = window.devicePixelRatio || 1;
+    var imgData = await ipcRenderer.invoke('capture-screen-area', {
+      x: x, y: y, width: w, height: h, pixelRatio: pixelRatio
     });
 
-    document.addEventListener('mousemove', (e) => {
-      if (!isSelecting) return;
+    if (!imgData) { ipcRenderer.send('close-capture-window'); return; }
 
-      const currentX = e.clientX;
-      const currentY = e.clientY;
+    phase = 2;
+    // Оставляем оверлей, рисуем серую полупрозрачную подложку вокруг выделения
+    drawDimBackground(x, y, w, h);
+    startEditor(imgData, { x: x, y: y, w: w, h: h });
+  });
 
-      const left = Math.min(startX, currentX);
-      const top = Math.min(startY, currentY);
-      const width = Math.abs(currentX - startX);
-      const height = Math.abs(currentY - startY);
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') ipcRenderer.send('close-capture-window');
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') undoLast();
+  });
 
-      selection.style.left = left + 'px';
-      selection.style.top = top + 'px';
-      selection.style.width = width + 'px';
-      selection.style.height = height + 'px';
-    });
+  // ── Фаза 2: редактор ─────────────────────────────────────────────────────
 
-    document.addEventListener('mouseup', async (e) => {
-      if (!isSelecting) return;
-      isSelecting = false;
+  var editor      = document.getElementById('editor');
+  var wrapper     = document.getElementById('canvasWrapper');
+  var imageCanvas = document.getElementById('imageCanvas');
+  var drawCanvas  = document.getElementById('drawCanvas');
+  var imgCtx      = imageCanvas.getContext('2d');
+  var drawCtx     = drawCanvas.getContext('2d');
 
-      const width = parseInt(selection.style.width);
-      const height = parseInt(selection.style.height);
+  var tool     = 'arrow';
+  var color    = '#ff0000';
+  var lineW    = 3;
+  var elements = [];
+  var drawing  = false;
+  var dx0 = 0, dy0 = 0;
+  var curPts   = [];
 
-      console.log('Mouse up, selection:', width, 'x', height);
+  var TBAR_W = 340, TBAR_H = 50;
+  var ACT_W  = 52;
+  var GAP    = 8;
 
-      if (width > 10 && height > 10) {
-        // Получаем координаты относительно окна (clientX/clientY)
-        const clientBounds = {
-          x: parseInt(selection.style.left),
-          y: parseInt(selection.style.top),
-          width: width,
-          height: height,
-        };
+  function startEditor(dataUrl, bounds) {
+    var img = new Image();
+    img.onload = function() {
+      var dw = Math.round(bounds.w);
+      var dh = Math.round(bounds.h);
 
-        // Получаем devicePixelRatio для правильного масштабирования
-        const pixelRatio = window.devicePixelRatio || 1;
-        console.log('Capturing area (client coords):', clientBounds, 'pixelRatio:', pixelRatio);
+      imageCanvas.width  = img.width;
+      imageCanvas.height = img.height;
+      imageCanvas.style.width  = dw + 'px';
+      imageCanvas.style.height = dh + 'px';
 
-        try {
-          // Захват области через main процесс с client координатами и pixelRatio
-          const imageData = await ipcRenderer.invoke('capture-screen-area', {
-            type: 'client',
-            ...clientBounds,
-            pixelRatio
-          });
-          console.log('Screenshot captured, data length:', imageData ? imageData.length : 'null');
+      drawCanvas.width  = img.width;
+      drawCanvas.height = img.height;
+      drawCanvas.style.width  = dw + 'px';
+      drawCanvas.style.height = dh + 'px';
 
-          if (imageData) {
-            // Сохраняем и открываем редактор
-            const result = await ipcRenderer.invoke('capture-area-done', imageData, clientBounds);
-            console.log('Save result:', result);
-            // Закрываем окно после успешного сохранения
-            ipcRenderer.send('close-capture-window');
-          }
-        } catch (error) {
-          console.error('Error capturing area:', error);
-        }
+      imgCtx.drawImage(img, 0, 0);
+
+      wrapper.style.width  = dw + 'px';
+      wrapper.style.height = dh + 'px';
+
+      editor.style.left    = bounds.x + 'px';
+      editor.style.top     = bounds.y + 'px';
+      editor.style.display = 'block';
+
+      var isFullscreen = (bounds.x === 0 && bounds.y === 0 &&
+                          dw >= window.innerWidth - 2 && dh >= window.innerHeight - 2);
+
+      // Тулбар
+      var tb = document.getElementById('toolbar');
+      if (isFullscreen) {
+        // Поверх изображения снизу по центру
+        tb.style.bottom = '16px';
+        tb.style.top    = 'auto';
+        tb.style.left   = Math.max(0, Math.round((dw - TBAR_W) / 2)) + 'px';
+        tb.style.zIndex = '30';
+      } else if (bounds.y + dh + GAP + TBAR_H < window.innerHeight) {
+        tb.style.top    = (dh + GAP) + 'px';
+        tb.style.bottom = 'auto';
+        tb.style.left   = Math.max(0, Math.round((dw - TBAR_W) / 2)) + 'px';
       } else {
-        // Если область слишком маленькая, просто закрываем окно
-        ipcRenderer.send('close-capture-window');
+        tb.style.top    = (-TBAR_H - GAP) + 'px';
+        tb.style.bottom = 'auto';
+        tb.style.left   = Math.max(0, Math.round((dw - TBAR_W) / 2)) + 'px';
       }
-    });
 
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        ipcRenderer.send('close-capture-window');
+      // Кнопки действий
+      var ac = document.getElementById('actions');
+      if (isFullscreen) {
+        // Поверх изображения сверху справа
+        ac.style.left   = (dw - ACT_W - 16) + 'px';
+        ac.style.top    = '16px';
+        ac.style.zIndex = '30';
+      } else if (bounds.x + dw + GAP + ACT_W < window.innerWidth) {
+        ac.style.left = (dw + GAP) + 'px';
+        ac.style.top  = '0px';
+      } else {
+        ac.style.left = (-ACT_W - GAP) + 'px';
+        ac.style.top  = '0px';
       }
+    };
+    img.src = dataUrl;
+  }
+
+  // ── Инструменты ──────────────────────────────────────────────────────────
+
+  document.querySelectorAll('.tool-btn[data-tool]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      tool = btn.dataset.tool;
+      document.querySelectorAll('.tool-btn[data-tool]').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
     });
-  </script>
+  });
+
+  document.getElementById('colorBtn').addEventListener('input', function(e) { color = e.target.value; });
+  document.getElementById('lineWidthRange').addEventListener('input', function(e) { lineW = +e.target.value; });
+  document.getElementById('undoBtn').addEventListener('click', undoLast);
+
+  function undoLast() { elements.pop(); redraw(); }
+
+  // ── Рисование ────────────────────────────────────────────────────────────
+
+  function getPos(e) {
+    var r = drawCanvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) * (drawCanvas.width  / r.width),
+      y: (e.clientY - r.top)  * (drawCanvas.height / r.height)
+    };
+  }
+
+  drawCanvas.addEventListener('mousedown', function(e) {
+    var p = getPos(e);
+    if (tool === 'text') {
+      var txt = prompt('Текст:');
+      if (txt) { elements.push({ type:'text', x:p.x, y:p.y, txt:txt, color:color, lineW:lineW }); redraw(); }
+      return;
+    }
+    drawing = true; dx0 = p.x; dy0 = p.y; curPts = [p];
+  });
+
+  drawCanvas.addEventListener('mousemove', function(e) {
+    if (!drawing) return;
+    var p = getPos(e);
+    curPts.push(p);
+    redraw();
+    if (tool !== 'pencil' && tool !== 'marker') drawShape(drawCtx, buildEl(p));
+  });
+
+  drawCanvas.addEventListener('mouseup',    function(e) { commit(getPos(e)); });
+  drawCanvas.addEventListener('mouseleave', function(e) { if (drawing) commit(getPos(e)); });
+
+  function commit(p) {
+    if (!drawing) return;
+    drawing = false;
+    var el = buildEl(p);
+    if (el) elements.push(el);
+    curPts = [];
+    redraw();
+  }
+
+  function buildEl(p) {
+    if (tool === 'pencil' || tool === 'marker') {
+      return curPts.length > 1 ? { type:tool, pts:curPts.slice(), color:color, lineW:lineW } : null;
+    }
+    if (tool === 'arrow' || tool === 'line' || tool === 'rectangle' || tool === 'ellipse') {
+      return { type:tool, x1:dx0, y1:dy0, x2:p.x, y2:p.y, color:color, lineW:lineW };
+    }
+    return null;
+  }
+
+  function redraw() {
+    drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+    elements.forEach(function(el) { drawShape(drawCtx, el); });
+    if (drawing && (tool === 'pencil' || tool === 'marker') && curPts.length > 1) {
+      drawShape(drawCtx, { type:tool, pts:curPts, color:color, lineW:lineW });
+    }
+  }
+
+  function drawShape(ctx, el) {
+    if (!el) return;
+    ctx.save();
+    ctx.strokeStyle = el.color;
+    ctx.fillStyle   = el.color;
+    ctx.lineWidth   = el.lineW;
+    ctx.lineCap     = 'round';
+    ctx.lineJoin    = 'round';
+
+    switch (el.type) {
+      case 'arrow':
+        if (Math.abs(el.x2-el.x1) < 2 && Math.abs(el.y2-el.y1) < 2) break;
+        var hl  = 14 + el.lineW * 1.5;
+        var ang = Math.atan2(el.y2-el.y1, el.x2-el.x1);
+        ctx.beginPath(); ctx.moveTo(el.x1,el.y1); ctx.lineTo(el.x2,el.y2); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(el.x2, el.y2);
+        ctx.lineTo(el.x2 - hl*Math.cos(ang - Math.PI/6), el.y2 - hl*Math.sin(ang - Math.PI/6));
+        ctx.lineTo(el.x2 - hl*Math.cos(ang + Math.PI/6), el.y2 - hl*Math.sin(ang + Math.PI/6));
+        ctx.closePath(); ctx.fill();
+        break;
+      case 'line':
+        ctx.beginPath(); ctx.moveTo(el.x1,el.y1); ctx.lineTo(el.x2,el.y2); ctx.stroke();
+        break;
+      case 'rectangle':
+        ctx.strokeRect(el.x1, el.y1, el.x2-el.x1, el.y2-el.y1);
+        break;
+      case 'ellipse':
+        var cx=(el.x1+el.x2)/2, cy=(el.y1+el.y2)/2;
+        var rx=Math.abs(el.x2-el.x1)/2, ry=Math.abs(el.y2-el.y1)/2;
+        if (rx<1||ry<1) break;
+        ctx.beginPath(); ctx.ellipse(cx,cy,rx,ry,0,0,2*Math.PI); ctx.stroke();
+        break;
+      case 'pencil':
+        if (el.pts && el.pts.length > 1) {
+          ctx.beginPath(); ctx.moveTo(el.pts[0].x, el.pts[0].y);
+          for (var i=1;i<el.pts.length;i++) ctx.lineTo(el.pts[i].x, el.pts[i].y);
+          ctx.stroke();
+        }
+        break;
+      case 'marker':
+        if (el.pts && el.pts.length > 1) {
+          ctx.globalAlpha = 0.35;
+          ctx.lineWidth   = el.lineW * 5;
+          ctx.beginPath(); ctx.moveTo(el.pts[0].x, el.pts[0].y);
+          for (var j=1;j<el.pts.length;j++) ctx.lineTo(el.pts[j].x, el.pts[j].y);
+          ctx.stroke();
+        }
+        break;
+      case 'text':
+        ctx.font = 'bold ' + (13 + el.lineW * 3) + 'px Arial';
+        ctx.fillText(el.txt, el.x, el.y);
+        break;
+    }
+    ctx.restore();
+  }
+
+  // ── Экспорт ───────────────────────────────────────────────────────────────
+
+  function getMerged() {
+    var m   = document.createElement('canvas');
+    m.width  = imageCanvas.width;
+    m.height = imageCanvas.height;
+    var ctx  = m.getContext('2d');
+    ctx.drawImage(imageCanvas, 0, 0);
+    ctx.drawImage(drawCanvas,  0, 0);
+    return Buffer.from(m.toDataURL('image/png').replace(/^data:image\/png;base64,/, ''), 'base64');
+  }
+
+  document.getElementById('saveBtn').addEventListener('click', async function() {
+    var res = await ipcRenderer.invoke('save-edited-image', getMerged());
+    if (res && res.success) ipcRenderer.send('close-capture-window');
+    else alert('Ошибка сохранения');
+  });
+
+  document.getElementById('copyBtn').addEventListener('click', async function() {
+    await ipcRenderer.invoke('copy-image-to-clipboard', getMerged());
+    ipcRenderer.send('close-capture-window');
+  });
+
+  document.getElementById('uploadBtn').addEventListener('click', async function() {
+    var res = await ipcRenderer.invoke('upload-image-to-server', getMerged());
+    if (res && res.success) {
+      try { await navigator.clipboard.writeText(res.url); } catch(err) {}
+      alert('Загружено!\nСсылка скопирована:\n' + res.url);
+      ipcRenderer.send('close-capture-window');
+    } else {
+      alert('Ошибка: ' + (res && res.error ? res.error : 'неизвестная ошибка'));
+    }
+  });
+
+  document.getElementById('closeBtn').addEventListener('click', function() {
+    ipcRenderer.send('close-capture-window');
+  });
+</script>
 </body>
 </html>

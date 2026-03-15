@@ -57,6 +57,7 @@ let editorWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isRecording = false;
 let pendingEditorImagePath: string | null = null;
+let pendingFullscreenImagePath: string | null = null;
 
 // Установка default значений
 const initializeSettings = () => {
@@ -281,17 +282,17 @@ async function handleCapture() {
     const screenshotImage = nativeImage.createFromBuffer(Buffer.from(imgBuffer));
     console.log('[handleCapture] NativeImage created, size:', screenshotImage.getSize());
 
-    // Сохраняем во временный файл (не в систему)
+    // Сохраняем во временный файл
     const tempImagePath = path.join(app.getPath('temp'), `skrinshot_full_${Date.now()}.png`);
     const fs = require('fs');
     const data = screenshotImage.toPNG();
     fs.writeFileSync(tempImagePath, data);
     console.log('[handleCapture] Temp image saved to:', tempImagePath);
 
-    // Открываем редактор с временным файлом
-    console.log('[handleCapture] Creating editor window...');
-    createEditorWindow(tempImagePath);
-    console.log('[handleCapture] Editor window created');
+    // Открываем capture-окно с встроенным редактором (минуя фазу выделения)
+    pendingFullscreenImagePath = tempImagePath;
+    createCaptureWindow();
+    console.log('[handleCapture] Capture window created for fullscreen edit');
   } catch (error) {
     console.error('[handleCapture] Error:', error);
   }
@@ -501,6 +502,12 @@ function registerHotkeys() {
 }
 
 // IPC handlers
+ipcMain.handle('get-pending-fullscreen', () => {
+  const p = pendingFullscreenImagePath;
+  pendingFullscreenImagePath = null;
+  return p;
+});
+
 ipcMain.handle('get-pending-image', () => {
   const path = pendingEditorImagePath;
   pendingEditorImagePath = null;
