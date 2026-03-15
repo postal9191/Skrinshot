@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, screen, nativeImage, clipboard } from 'electron';
+import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, screen, nativeImage, clipboard, session, desktopCapturer } from 'electron';
 import path from 'path';
 import Store from 'electron-store';
 import screenshot from 'screenshot-desktop';
@@ -42,6 +42,13 @@ const getEditorHtmlPath = () => {
   return path.join(process.resourcesPath, 'app', 'dist', 'renderer', 'editor.html');
 };
 
+const getRecordingHtmlPath = () => {
+  if (isDev) {
+    return path.join(__dirname, '../renderer/recording.html');
+  }
+  return path.join(process.resourcesPath, 'app', 'dist', 'renderer', 'recording.html');
+};
+
 // Проверка existence файла
 const fileExists = (filePath: string): boolean => {
   try {
@@ -54,6 +61,7 @@ const fileExists = (filePath: string): boolean => {
 let mainWindow: BrowserWindow | null = null;
 let captureWindow: BrowserWindow | null = null;
 let editorWindow: BrowserWindow | null = null;
+let recordingWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isRecording = false;
 let pendingEditorImagePath: string | null = null;
@@ -155,6 +163,54 @@ function createCaptureWindow() {
   });
 }
 
+function createRecordingWindow(selectArea = false) {
+  if (recordingWindow) {
+    recordingWindow.focus();
+    return;
+  }
+
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height, x, y } = primaryDisplay.bounds;
+
+  recordingWindow = new BrowserWindow({
+    width, height, x, y,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+
+  // Скрываем окно из захвата экрана — иначе индикатор REC попадёт в запись
+  recordingWindow.setContentProtection(true);
+
+  // Пропускаем клики сквозь окно (рабочий стол остаётся доступным)
+  // При выборе области — нужны клики сразу, поэтому не включаем ignore
+  if (!selectArea) {
+    recordingWindow.setIgnoreMouseEvents(true, { forward: true });
+  }
+
+  const hash = selectArea ? 'area' : '';
+
+  if (isDev) {
+    recordingWindow.loadURL(`${VITE_DEV_SERVER_URL}/recording.html${hash ? '#' + hash : ''}`);
+  } else {
+    const recPath = getRecordingHtmlPath();
+    if (fileExists(recPath)) {
+      recordingWindow.loadFile(recPath, hash ? { hash } : undefined);
+    }
+  }
+
+  recordingWindow.on('closed', () => {
+    recordingWindow = null;
+    isRecording = false;
+    updateTrayMenu(false);
+  });
+}
+
 function createEditorWindow(imagePath?: string) {
   pendingEditorImagePath = imagePath || null;
 
@@ -193,64 +249,53 @@ function getTrayIconPath() {
   return path.join(process.resourcesPath, 'app', 'public', 'icon.ico');
 }
 
+function updateTrayMenu(recording: boolean) {
+  if (!tray) return;
+  const menu = recording
+    ? Menu.buildFromTemplate([
+        { label: '⏹ Остановить запись', click: () => handleRecord() },
+        { type: 'separator' },
+        { label: 'Выйти', click: () => app.quit() },
+      ])
+    : Menu.buildFromTemplate([
+        { label: 'Скриншот',           click: () => handleCapture() },
+        { label: 'Скриншот области',  click: () => handleCaptureArea() },
+        { label: 'Запись экрана',     click: () => handleRecord() },
+        { label: 'Запись области',    click: () => handleRecordArea() },
+        { type: 'separator' },
+        { label: 'История',   click: () => showMainWindow() },
+        { label: 'Настройки', click: () => showMainWindow('settings') },
+        { type: 'separator' },
+        { label: 'Выйти', click: () => app.quit() },
+      ]);
+  tray.setContextMenu(menu);
+}
+
 function createTray() {
   const iconPath = getTrayIconPath();
   let icon = nativeImage.createFromPath(iconPath);
-  
-  // Если иконка не загрузилась, создаём резервную
+
   if (icon.isEmpty()) {
     const size = 16;
     const buffer = Buffer.alloc(size * size * 4);
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const idx = (y * size + x) * 4;
-        buffer[idx] = 255;
-        buffer[idx + 1] = 100;
-        buffer[idx + 2] = 100;
-        buffer[idx + 3] = 255;
+        buffer[idx] = 255; buffer[idx + 1] = 100;
+        buffer[idx + 2] = 100; buffer[idx + 3] = 255;
       }
     }
     icon = nativeImage.createFromBuffer(buffer, { width: size, height: size });
   }
-  
-  // Ресайз до 16x16 для трея
-  const resizedIcon = icon.resize({ width: 16, height: 16 });
-  
-  tray = new Tray(resizedIcon);
 
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Скриншот',
-      click: () => handleCapture(),
-    },
-    {
-      label: 'Скриншот области',
-      click: () => handleCaptureArea(),
-    },
-    {
-      label: 'Запись экрана',
-      click: () => handleRecord(),
-    },
-    { type: 'separator' },
-    {
-      label: 'История',
-      click: () => showMainWindow(),
-    },
-    {
-      label: 'Настройки',
-      click: () => showMainWindow('settings'),
-    },
-    { type: 'separator' },
-    {
-      label: 'Выйти',
-      click: () => app.quit(),
-    },
-  ]);
+  // Создаём tray только один раз
+  if (!tray) {
+    tray = new Tray(icon.resize({ width: 16, height: 16 }));
+    tray.setToolTip('Skrinshot');
+    tray.on('double-click', () => showMainWindow());
+  }
 
-  tray.setToolTip('Skrinshot');
-  tray.setContextMenu(contextMenu);
-
-  tray.on('double-click', () => showMainWindow());
+  updateTrayMenu(false);
 }
 
 function showMainWindow(page?: string) {
@@ -308,34 +353,18 @@ function handleCaptureArea() {
 }
 
 function handleRecord() {
-  isRecording = !isRecording;
-  
-  if (mainWindow) {
-    mainWindow.webContents.send('recording-state', isRecording);
+  if (isRecording && recordingWindow) {
+    recordingWindow.webContents.send('stop-recording-signal');
+  } else {
+    createRecordingWindow(false);
   }
-  
-  if (tray) {
-    const contextMenu = Menu.buildFromTemplate([
-      {
-        label: isRecording ? 'Остановить запись' : 'Запись экрана',
-        click: () => handleRecord(),
-      },
-      { type: 'separator' },
-      {
-        label: 'История',
-        click: () => showMainWindow(),
-      },
-      {
-        label: 'Настройки',
-        click: () => showMainWindow('settings'),
-      },
-      { type: 'separator' },
-      {
-        label: 'Выйти',
-        click: () => app.quit(),
-      },
-    ]);
-    tray.setContextMenu(contextMenu);
+}
+
+function handleRecordArea() {
+  if (isRecording && recordingWindow) {
+    recordingWindow.webContents.send('stop-recording-signal');
+  } else {
+    createRecordingWindow(true);
   }
 }
 
@@ -497,6 +526,12 @@ function registerHotkeys() {
   if (hotkeys.record) {
     globalShortcut.register(hotkeys.record, () => {
       handleRecord();
+    });
+  }
+
+  if (hotkeys.recordArea) {
+    globalShortcut.register(hotkeys.recordArea, () => {
+      handleRecordArea();
     });
   }
 }
@@ -915,53 +950,111 @@ ipcMain.handle('upload-image-to-server', async (_, buffer: Buffer) => {
   }
 });
 
-ipcMain.handle('start-recording', async () => {
-  // Запуск записи экрана будет реализован через renderer процесс
-  return { success: true };
+// Обновляем трей когда запись началась
+ipcMain.on('recording-started', () => {
+  isRecording = true;
+  updateTrayMenu(true);
 });
 
-ipcMain.handle('stop-recording', async (_, videoData: Buffer, bounds: any) => {
-  const settings = store.get('settings') as any;
-  const template = settings.fileNameTemplate || 'recording_{YYYY}-{MM}-{DD}_{HH}-{mm}-{ss}';
-  
-  const now = new Date();
-  const fileName = template
-    .replace('{YYYY}', now.getFullYear().toString())
-    .replace('{MM}', String(now.getMonth() + 1).padStart(2, '0'))
-    .replace('{DD}', String(now.getDate()).padStart(2, '0'))
-    .replace('{HH}', String(now.getHours()).padStart(2, '0'))
-    .replace('{mm}', String(now.getMinutes()).padStart(2, '0'))
-    .replace('{ss}', String(now.getSeconds()).padStart(2, '0'));
-  
-  const savePath = settings.savePath || app.getPath('videos');
-  const fullPath = path.join(savePath, `${fileName}.mp4`);
-  
+// Восстанавливаем трей когда запись остановлена
+ipcMain.on('recording-stopped', () => {
+  isRecording = false;
+  updateTrayMenu(false);
+});
+
+// Сохраняем видео во временный файл для превью
+ipcMain.handle('save-video-temp', (_, videoData: Buffer) => {
   try {
     const fs = require('fs');
-    fs.writeFileSync(fullPath, videoData);
-    
+    const tempPath = path.join(app.getPath('temp'), `skrinshot_rec_${Date.now()}.webm`);
+    fs.writeFileSync(tempPath, videoData);
+    return { success: true, path: tempPath };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Сохраняем видео в финальное место
+ipcMain.handle('save-video-local', (_, tempPath: string) => {
+  try {
+    const fs = require('fs');
+    const settings = store.get('settings') as any;
+    const imageTemplate = settings.fileNameTemplate || 'screenshot_{YYYY}-{MM}-{DD}_{HH}-{mm}-{ss}';
+    const template = imageTemplate.replace(/^screenshot/, 'video');
+    const now = new Date();
+    const fileName = template
+      .replace('{YYYY}', now.getFullYear().toString())
+      .replace('{MM}', String(now.getMonth() + 1).padStart(2, '0'))
+      .replace('{DD}', String(now.getDate()).padStart(2, '0'))
+      .replace('{HH}', String(now.getHours()).padStart(2, '0'))
+      .replace('{mm}', String(now.getMinutes()).padStart(2, '0'))
+      .replace('{ss}', String(now.getSeconds()).padStart(2, '0'));
+
+    const savePath = settings.savePath || app.getPath('videos');
+    const fullPath = path.join(savePath, `${fileName}.webm`);
+    fs.copyFileSync(tempPath, fullPath);
+    fs.unlinkSync(tempPath);
+
+    const size = fs.statSync(fullPath).size;
     addToHistory({
       id: Date.now().toString(),
       date: now.toISOString(),
       type: 'video',
       localPath: fullPath,
-      status: settings.autoUpload ? 'uploading' : 'pending',
-      size: videoData.length,
+      status: 'pending',
+      size,
     });
-    
-    if (settings.autoUpload) {
-      uploadFile(fullPath);
-    }
-    
+
     return { success: true, path: fullPath };
-  } catch (error) {
-    console.error('Error saving video:', error);
-    return { success: false, error: error };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Загружаем видео на сервер
+ipcMain.handle('upload-video', async (_, tempPath: string) => {
+  try {
+    const result = await uploadFile(tempPath);
+    if (result && result.success) {
+      const fs = require('fs');
+      try { fs.unlinkSync(tempPath); } catch {}
+    }
+    return result || { success: false, error: 'Ошибка загрузки' };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Удаляем временный файл
+ipcMain.handle('discard-video', (_, tempPath: string) => {
+  try {
+    const fs = require('fs');
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+  } catch {}
+  return { success: true };
+});
+
+// Закрываем окно записи
+ipcMain.on('close-recording-window', () => {
+  if (recordingWindow) recordingWindow.close();
+});
+
+// Переключение прозрачности кликов (hover на панели управления)
+ipcMain.on('set-ignore-mouse-events', (_, ignore: boolean) => {
+  if (recordingWindow) {
+    recordingWindow.setIgnoreMouseEvents(ignore, { forward: true });
   }
 });
 
 // App lifecycle
 app.whenReady().then(() => {
+  // Разрешаем захват экрана для записи (Electron 28+)
+  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+    desktopCapturer.getSources({ types: ['screen'] }).then(sources => {
+      callback({ video: sources[0], audio: 'loopback' });
+    });
+  });
+
   initializeSettings();
   createTray();
   createMainWindow();

@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Запись экрана</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: transparent;
+      user-select: none;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    /* ── Фаза 0: выбор области ── */
+    #selOverlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      cursor: crosshair;
+    }
+
+    #selCanvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    #selHint {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      background: rgba(0,0,0,0.65);
+      padding: 14px 28px;
+      border-radius: 10px;
+      pointer-events: none;
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    #selSizeLabel {
+      position: fixed;
+      color: white;
+      font-size: 12px;
+      background: rgba(0,0,0,0.7);
+      padding: 4px 8px;
+      border-radius: 4px;
+      pointer-events: none;
+      display: none;
+    }
+
+    /* ── Фаза 1: индикатор записи ── */
+    #recBar {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(20,20,20,0.92);
+      border-radius: 50px;
+      padding: 10px 20px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.6);
+      backdrop-filter: blur(8px);
+      z-index: 100;
+    }
+
+    #recDot {
+      width: 12px;
+      height: 12px;
+      background: #e53e3e;
+      border-radius: 50%;
+      animation: blink 1s infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.2; }
+    }
+
+    #recLabel {
+      color: #e53e3e;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1px;
+    }
+
+    #recTimer {
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      min-width: 44px;
+    }
+
+    #stopBtn {
+      width: 30px;
+      height: 30px;
+      background: #e53e3e;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s;
+      margin-left: 4px;
+    }
+    #stopBtn:hover { background: #c53030; }
+    #stopBtn::before {
+      content: '';
+      width: 12px;
+      height: 12px;
+      background: white;
+      border-radius: 2px;
+    }
+
+    #errorMsg {
+      color: #fc8181;
+      font-size: 13px;
+    }
+
+    /* ── Фаза 2: превью видео ── */
+    #preview {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.82);
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+    }
+
+    #previewCard {
+      background: #1a1a2e;
+      border-radius: 16px;
+      padding: 28px;
+      width: min(800px, 90vw);
+      box-shadow: 0 20px 60px rgba(0,0,0,0.8);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    #previewTitle {
+      color: white;
+      font-size: 18px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #previewVideo {
+      width: 100%;
+      max-height: 50vh;
+      border-radius: 8px;
+      background: #000;
+      display: block;
+    }
+
+    #videoInfo {
+      color: rgba(255,255,255,0.5);
+      font-size: 13px;
+      display: flex;
+      gap: 16px;
+    }
+
+    #previewActions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+
+    .pBtn {
+      padding: 10px 22px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .pBtn.primary   { background: #4a90d9; color: white; }
+    .pBtn.primary:hover { background: #357abd; }
+    .pBtn.success   { background: #38a169; color: white; }
+    .pBtn.success:hover { background: #2f855a; }
+    .pBtn.danger    { background: transparent; color: #fc8181; border: 1px solid rgba(252,129,129,0.3); }
+    .pBtn.danger:hover  { background: rgba(252,129,129,0.1); }
+
+    #statusText {
+      color: rgba(255,255,255,0.6);
+      font-size: 13px;
+      text-align: center;
+      min-height: 18px;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Фаза 0: выбор области -->
+<div id="selOverlay">
+  <canvas id="selCanvas"></canvas>
+  <div id="selHint">Выделите область для записи<br><small style="opacity:0.7;font-weight:400">ESC — отмена &nbsp;·&nbsp; Отпустите мышь — подтвердить</small></div>
+  <div id="selSizeLabel"></div>
+</div>
+
+<!-- Фаза 1: индикатор записи -->
+<div id="recBar" style="display:none">
+  <div id="recDot"></div>
+  <span id="recLabel">REC</span>
+  <span id="recTimer">00:00</span>
+  <button id="stopBtn" title="Остановить запись"></button>
+  <span id="errorMsg" style="display:none"></span>
+</div>
+
+<!-- Фаза 2: превью -->
+<div id="preview">
+  <div id="previewCard">
+    <div id="previewTitle">&#127909; Запись завершена</div>
+    <video id="previewVideo" controls loop></video>
+    <div id="videoInfo">
+      <span id="infoDuration">Длительность: —</span>
+      <span id="infoSize">Размер: —</span>
+    </div>
+    <div id="statusText"></div>
+    <div id="previewActions">
+      <button class="pBtn danger"   id="discardBtn">&#128465; Отменить</button>
+      <button class="pBtn primary"  id="uploadBtn" >&#9729; На сервер</button>
+      <button class="pBtn success"  id="saveBtn"   >&#128190; Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  var { ipcRenderer } = require('electron');
+
+  var mediaRecorder = null;
+  var chunks        = [];
+  var stream        = null;
+  var timerInterval = null;
+  var seconds       = 0;
+  var videoBlob     = null;
+  var tempVideoPath = null;
+  var cropBounds    = null; // {x,y,w,h} в физических пикселях экрана
+  var animFrameId   = null;
+  var offVideo      = null;
+
+  // Режим записи области — передаётся через хэш URL
+  var isAreaMode = window.location.hash === '#area';
+
+  // ── Таймер ────────────────────────────────────────────────────────────────
+
+  function startTimer() {
+    seconds = 0;
+    timerInterval = setInterval(function() {
+      seconds++;
+      var m = String(Math.floor(seconds / 60)).padStart(2, '0');
+      var s = String(seconds % 60).padStart(2, '0');
+      document.getElementById('recTimer').textContent = m + ':' + s;
+    }, 1000);
+  }
+
+  function stopTimer() {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+
+  // ── Фаза 0: выбор области ─────────────────────────────────────────────────
+
+  function startSelectionPhase() {
+    var overlay   = document.getElementById('selOverlay');
+    var canvas    = document.getElementById('selCanvas');
+    var hint      = document.getElementById('selHint');
+    var sizeLabel = document.getElementById('selSizeLabel');
+
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+    var ctx = canvas.getContext('2d');
+
+    overlay.style.display = 'block';
+    ipcRenderer.send('set-ignore-mouse-events', false);
+
+    var startX = 0, startY = 0, isSelecting = false;
+
+    function drawOverlay(x, y, w, h) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (w > 0 && h > 0) {
+        ctx.clearRect(x, y, w, h);
+        ctx.strokeStyle = '#4a90d9';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, w, h);
+      }
+    }
+
+    // Начальная тёмная подложка
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    overlay.addEventListener('mousedown', function onDown(e) {
+      startX = e.clientX;
+      startY = e.clientY;
+      isSelecting = true;
+      hint.style.display = 'none';
+    });
+
+    overlay.addEventListener('mousemove', function onMove(e) {
+      if (!isSelecting) return;
+      var x = Math.min(startX, e.clientX);
+      var y = Math.min(startY, e.clientY);
+      var w = Math.abs(e.clientX - startX);
+      var h = Math.abs(e.clientY - startY);
+      drawOverlay(x, y, w, h);
+      sizeLabel.style.display = 'block';
+      sizeLabel.style.left = (e.clientX + 12) + 'px';
+      sizeLabel.style.top  = (e.clientY + 12) + 'px';
+      sizeLabel.textContent = Math.round(w) + ' × ' + Math.round(h);
+    });
+
+    overlay.addEventListener('mouseup', function onUp(e) {
+      if (!isSelecting) return;
+      isSelecting = false;
+      var x = Math.min(startX, e.clientX);
+      var y = Math.min(startY, e.clientY);
+      var w = Math.abs(e.clientX - startX);
+      var h = Math.abs(e.clientY - startY);
+
+      if (w < 10 || h < 10) {
+        // Слишком маленькая область — сброс
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        hint.style.display = 'block';
+        sizeLabel.style.display = 'none';
+        return;
+      }
+
+      // Переводим из CSS-пикселей в физические пиксели экрана
+      var dpr = window.devicePixelRatio || 1;
+      cropBounds = {
+        x: Math.round(x * dpr),
+        y: Math.round(y * dpr),
+        w: Math.round(w * dpr),
+        h: Math.round(h * dpr),
+      };
+
+      overlay.style.display = 'none';
+      // Во время записи кнопка REC должна быть кликабельной — restore hover logic
+      ipcRenderer.send('set-ignore-mouse-events', true);
+      startRecording();
+    });
+
+    document.addEventListener('keydown', function escHandler(e) {
+      if (e.key === 'Escape') {
+        document.removeEventListener('keydown', escHandler);
+        ipcRenderer.send('close-recording-window');
+      }
+    });
+  }
+
+  // ── Запуск записи ─────────────────────────────────────────────────────────
+
+  async function startRecording() {
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 30 },
+        audio: true
+      });
+    } catch (e) {
+      ipcRenderer.send('close-recording-window');
+      return;
+    }
+
+    var recordStream = stream;
+
+    // Если выбрана область — кропаем через offscreen canvas
+    if (cropBounds) {
+      var cb = cropBounds;
+      var offCanvas = document.createElement('canvas');
+      offCanvas.width  = cb.w;
+      offCanvas.height = cb.h;
+      var offCtx = offCanvas.getContext('2d');
+
+      offVideo = document.createElement('video');
+      offVideo.srcObject = stream;
+      offVideo.muted = true;
+      offVideo.play();
+
+      function drawCropFrame() {
+        if (offVideo && offVideo.readyState >= 2) {
+          offCtx.drawImage(offVideo,
+            cb.x, cb.y, cb.w, cb.h,
+            0,    0,    cb.w, cb.h
+          );
+        }
+        animFrameId = requestAnimationFrame(drawCropFrame);
+      }
+      offVideo.onplay = drawCropFrame;
+
+      var canvasStream = offCanvas.captureStream(30);
+      // Добавляем аудио из оригинального стрима
+      stream.getAudioTracks().forEach(function(t) { canvasStream.addTrack(t); });
+      recordStream = canvasStream;
+    }
+
+    var options = { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 5000000 };
+    try {
+      mediaRecorder = new MediaRecorder(recordStream, options);
+    } catch (e) {
+      options = { mimeType: 'video/webm' };
+      mediaRecorder = new MediaRecorder(recordStream, options);
+    }
+
+    chunks = [];
+
+    mediaRecorder.ondataavailable = function(e) {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = async function() {
+      stopTimer();
+      stopStream();
+      if (animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
+      if (offVideo)    { offVideo.srcObject = null; offVideo = null; }
+
+      videoBlob = new Blob(chunks, { type: 'video/webm' });
+      var arrayBuffer = await videoBlob.arrayBuffer();
+      var buffer = Buffer.from(arrayBuffer);
+
+      ipcRenderer.send('recording-stopped');
+
+      var result = await ipcRenderer.invoke('save-video-temp', buffer);
+      if (result && result.success) {
+        tempVideoPath = result.path;
+        showPreview(result.path, buffer.length);
+      } else {
+        showError('Ошибка при сохранении записи');
+      }
+    };
+
+    stream.getVideoTracks()[0].onended = function() { stopRecording(); };
+
+    mediaRecorder.start(1000);
+    startTimer();
+    document.getElementById('recBar').style.display = 'flex';
+    ipcRenderer.send('recording-started');
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+    }
+  }
+
+  function stopStream() {
+    if (stream) {
+      stream.getTracks().forEach(function(t) { t.stop(); });
+      stream = null;
+    }
+  }
+
+  function showError(msg) {
+    var e = document.getElementById('errorMsg');
+    e.style.display = 'inline';
+    e.textContent = msg;
+    document.getElementById('recBar').style.display = 'flex';
+  }
+
+  // ── Превью ────────────────────────────────────────────────────────────────
+
+  function showPreview(filePath, byteSize) {
+    document.getElementById('recBar').style.display = 'none';
+
+    var normalized = filePath.replace(/\\/g, '/');
+    var fileUrl = /^[a-zA-Z]:/.test(normalized) ? 'file:///' + normalized : 'file://' + normalized;
+
+    var video = document.getElementById('previewVideo');
+    video.src = fileUrl;
+
+    var recSeconds = seconds;
+    var formatDur = function(d) {
+      var m = String(Math.floor(d / 60)).padStart(2, '0');
+      var s = String(d % 60).padStart(2, '0');
+      return m + ':' + s;
+    };
+    document.getElementById('infoDuration').textContent = 'Длительность: ' + formatDur(recSeconds);
+
+    video.onloadedmetadata = function() {
+      var d = video.duration;
+      if (d && isFinite(d) && !isNaN(d)) {
+        document.getElementById('infoDuration').textContent = 'Длительность: ' + formatDur(Math.round(d));
+      }
+    };
+
+    var mb = (byteSize / (1024 * 1024)).toFixed(1);
+    document.getElementById('infoSize').textContent = 'Размер: ' + mb + ' МБ';
+
+    var p = document.getElementById('preview');
+    p.style.display = 'flex';
+    ipcRenderer.send('set-ignore-mouse-events', false);
+  }
+
+  function setStatus(msg) {
+    document.getElementById('statusText').textContent = msg;
+  }
+
+  function disableActions() {
+    document.getElementById('saveBtn').disabled   = true;
+    document.getElementById('uploadBtn').disabled = true;
+    document.getElementById('discardBtn').disabled = true;
+  }
+
+  // ── Кнопки ────────────────────────────────────────────────────────────────
+
+  // Hover на панели REC — включаем/выключаем click-through
+  document.getElementById('recBar').addEventListener('mouseenter', function() {
+    ipcRenderer.send('set-ignore-mouse-events', false);
+  });
+  document.getElementById('recBar').addEventListener('mouseleave', function() {
+    ipcRenderer.send('set-ignore-mouse-events', true);
+  });
+
+  document.getElementById('preview').addEventListener('mouseenter', function() {
+    ipcRenderer.send('set-ignore-mouse-events', false);
+  });
+
+  document.getElementById('stopBtn').addEventListener('click', stopRecording);
+
+  document.getElementById('saveBtn').addEventListener('click', async function() {
+    if (!tempVideoPath) return;
+    disableActions();
+    setStatus('Сохранение...');
+    var res = await ipcRenderer.invoke('save-video-local', tempVideoPath);
+    if (res && res.success) {
+      setStatus('Сохранено: ' + res.path);
+      setTimeout(function() { ipcRenderer.send('close-recording-window'); }, 1200);
+    } else {
+      setStatus('Ошибка: ' + (res && res.error ? res.error : 'неизвестная ошибка'));
+    }
+  });
+
+  document.getElementById('uploadBtn').addEventListener('click', async function() {
+    if (!tempVideoPath) return;
+    disableActions();
+    setStatus('Загрузка на сервер...');
+    var res = await ipcRenderer.invoke('upload-video', tempVideoPath);
+    if (res && res.success) {
+      try { await navigator.clipboard.writeText(res.url); } catch(e) {}
+      setStatus('Загружено! Ссылка скопирована: ' + res.url);
+      setTimeout(function() { ipcRenderer.send('close-recording-window'); }, 2000);
+    } else {
+      setStatus('Ошибка: ' + (res && res.error ? res.error : 'неизвестная ошибка'));
+      document.getElementById('saveBtn').disabled   = false;
+      document.getElementById('uploadBtn').disabled = false;
+      document.getElementById('discardBtn').disabled = false;
+    }
+  });
+
+  document.getElementById('discardBtn').addEventListener('click', async function() {
+    if (tempVideoPath) await ipcRenderer.invoke('discard-video', tempVideoPath);
+    ipcRenderer.send('close-recording-window');
+  });
+
+  // ── Сигнал остановки из main (через трей) ────────────────────────────────
+
+  ipcRenderer.on('stop-recording-signal', stopRecording);
+
+  // ── Старт ─────────────────────────────────────────────────────────────────
+
+  if (isAreaMode) {
+    startSelectionPhase();
+  } else {
+    startRecording();
+  }
+</script>
+</body>
+</html>

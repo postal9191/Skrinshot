@@ -8,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   plugins: [
     react({
-      exclude: ['**/capture.html', '**/editor.html'],
+      exclude: ['**/capture.html', '**/editor.html', '**/recording.html'],
     }),
   ],
   root: 'src/renderer',
@@ -21,6 +21,7 @@ export default defineConfig({
         main: path.resolve(__dirname, 'src/renderer/index.html'),
         editor: path.resolve(__dirname, 'src/renderer/editor.html'),
         capture: path.resolve(__dirname, 'src/renderer/capture.html'),
+        recording: path.resolve(__dirname, 'src/renderer/recording.html'),
       },
     },
   },

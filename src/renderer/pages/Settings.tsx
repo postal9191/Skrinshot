@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 const { ipcRenderer } = require('electron');
 
@@ -16,6 +16,7 @@ interface Settings {
     capture: string;
     captureArea: string;
     record: string;
+    recordArea: string;
   };
   autoLaunch: boolean;
   theme: 'light' | 'dark';
@@ -35,10 +36,106 @@ const defaultSettings: Settings = {
     capture: 'PrintScreen',
     captureArea: 'Ctrl+PrintScreen',
     record: 'Shift+PrintScreen',
+    recordArea: 'Ctrl+Shift+PrintScreen',
   },
   autoLaunch: false,
   theme: 'light',
 };
+
+// Преобразует KeyboardEvent в строку акселератора Electron
+function eventToAccelerator(e: KeyboardEvent): string | null {
+  const parts: string[] = [];
+
+  if (e.ctrlKey)  parts.push('Ctrl');
+  if (e.altKey)   parts.push('Alt');
+  if (e.shiftKey) parts.push('Shift');
+  if (e.metaKey)  parts.push('Super');
+
+  const keyMap: Record<string, string> = {
+    'PrintScreen':   'PrintScreen',
+    'F1': 'F1', 'F2': 'F2', 'F3': 'F3', 'F4': 'F4',
+    'F5': 'F5', 'F6': 'F6', 'F7': 'F7', 'F8': 'F8',
+    'F9': 'F9', 'F10': 'F10', 'F11': 'F11', 'F12': 'F12',
+    'Home': 'Home', 'End': 'End', 'Insert': 'Insert', 'Delete': 'Delete',
+    'PageUp': 'PageUp', 'PageDown': 'PageDown',
+    'ArrowUp': 'Up', 'ArrowDown': 'Down', 'ArrowLeft': 'Left', 'ArrowRight': 'Right',
+    'Tab': 'Tab', 'Escape': 'Escape', 'Space': 'Space',
+    'Backspace': 'Backspace', 'Enter': 'Return',
+    'NumLock': 'NumLock', 'ScrollLock': 'Scrolllock', 'CapsLock': 'Capslock',
+    'Pause': 'Pause',
+  };
+
+  let key = '';
+
+  if (e.key in keyMap) {
+    key = keyMap[e.key];
+  } else if (e.key.length === 1) {
+    key = e.key.toUpperCase();
+  } else {
+    return null; // только модификатор — не записываем
+  }
+
+  if (!key) return null;
+  parts.push(key);
+  return parts.join('+');
+}
+
+interface HotkeyInputProps {
+  value: string;
+  onChange: (val: string) => void;
+  placeholder?: string;
+}
+
+function HotkeyInput({ value, onChange, placeholder }: HotkeyInputProps) {
+  const [capturing, setCapturing] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function handleFocus() {
+    setCapturing(true);
+  }
+
+  function handleBlur() {
+    setCapturing(false);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (e.key === 'Escape') {
+      setCapturing(false);
+      inputRef.current?.blur();
+      return;
+    }
+
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      onChange('');
+      return;
+    }
+
+    const acc = eventToAccelerator(e.nativeEvent);
+    if (acc) {
+      onChange(acc);
+      setCapturing(false);
+      inputRef.current?.blur();
+    }
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      readOnly
+      value={capturing ? '...' : value}
+      placeholder={capturing ? 'Нажмите комбинацию клавиш' : (placeholder || 'Нажмите для назначения')}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      onKeyDown={handleKeyDown}
+      style={{ cursor: 'pointer', caretColor: 'transparent' }}
+      title="Кликните и нажмите нужную комбинацию клавиш"
+    />
+  );
+}
 
 export function Settings() {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
@@ -50,7 +147,7 @@ export function Settings() {
 
   async function loadSettings() {
     const loaded = await ipcRenderer.invoke('get-settings');
-    setSettings({ ...defaultSettings, ...loaded });
+    setSettings({ ...defaultSettings, ...loaded, hotkeys: { ...defaultSettings.hotkeys, ...(loaded?.hotkeys || {}) } });
   }
 
   async function saveSettings() {
@@ -74,7 +171,7 @@ export function Settings() {
     <div className="settings">
       <div className="settings-section">
         <h2>📁 Сохранение файлов</h2>
-        
+
         <div className="form-group">
           <label>Папка для сохранения</label>
           <div className="input-with-btn">
@@ -106,7 +203,7 @@ export function Settings() {
 
       <div className="settings-section">
         <h2>🖼️ Изображения</h2>
-        
+
         <div className="form-group">
           <label>Формат</label>
           <select
@@ -134,7 +231,7 @@ export function Settings() {
 
       <div className="settings-section">
         <h2>🎥 Видео</h2>
-        
+
         <div className="form-group">
           <label>FPS (кадров в секунду)</label>
           <select
@@ -163,7 +260,7 @@ export function Settings() {
 
       <div className="settings-section">
         <h2>☁️ Загрузка на сервер</h2>
-        
+
         <div className="form-group">
           <label>Адрес сервера</label>
           <input
@@ -198,41 +295,50 @@ export function Settings() {
 
       <div className="settings-section">
         <h2>⌨️ Горячие клавиши</h2>
-        
+        <small style={{ display: 'block', marginBottom: 12, opacity: 0.6 }}>
+          Кликните на поле и нажмите нужную комбинацию. Delete — очистить.
+        </small>
+
         <div className="form-group">
           <label>Скриншот всего экрана</label>
-          <input
-            type="text"
+          <HotkeyInput
             value={settings.hotkeys.capture}
-            onChange={(e) => handleHotkeyChange('capture', e.target.value)}
+            onChange={(v) => handleHotkeyChange('capture', v)}
             placeholder="PrintScreen"
           />
         </div>
 
         <div className="form-group">
           <label>Скриншот области</label>
-          <input
-            type="text"
+          <HotkeyInput
             value={settings.hotkeys.captureArea}
-            onChange={(e) => handleHotkeyChange('captureArea', e.target.value)}
+            onChange={(v) => handleHotkeyChange('captureArea', v)}
             placeholder="Ctrl+PrintScreen"
           />
         </div>
 
         <div className="form-group">
           <label>Запись экрана</label>
-          <input
-            type="text"
+          <HotkeyInput
             value={settings.hotkeys.record}
-            onChange={(e) => handleHotkeyChange('record', e.target.value)}
+            onChange={(v) => handleHotkeyChange('record', v)}
             placeholder="Shift+PrintScreen"
+          />
+        </div>
+
+        <div className="form-group">
+          <label>Запись области</label>
+          <HotkeyInput
+            value={settings.hotkeys.recordArea}
+            onChange={(v) => handleHotkeyChange('recordArea', v)}
+            placeholder="Ctrl+Shift+PrintScreen"
           />
         </div>
       </div>
 
       <div className="settings-section">
         <h2>🎨 Интерфейс</h2>
-        
+
         <div className="form-group">
           <label>Тема</label>
           <select
