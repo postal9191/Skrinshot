@@ -39,18 +39,12 @@ function App() {
             >
               Настройки
             </button>
-            <button
-              className="nav-btn test-btn"
-              onClick={() => ipcRenderer.send('test-capture')}
-            >
-              📷 ТЕСТ СКРИНШОТ
-            </button>
           </nav>
         </div>
       </header>
 
       <main className="main">
-        {currentPage === 'history' && <History />}
+        {currentPage === 'history' && <div className="main-padded"><History /></div>}
         {currentPage === 'settings' && <Settings />}
       </main>
     </div>
