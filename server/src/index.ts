@@ -48,7 +48,7 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
-  const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'video/mp4'];
+  const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'video/mp4', 'video/webm', 'video/x-matroska'];
   log('SERVER', `🔍 File filter check: ${file.mimetype} (original: ${file.originalname})`);
   if (allowedTypes.includes(file.mimetype)) {
     log('SERVER', `✅ File type allowed: ${file.mimetype}`);

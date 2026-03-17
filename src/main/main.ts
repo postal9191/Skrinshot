@@ -394,14 +394,16 @@ function saveScreenshot(image: Electron.NativeImage): string | null {
     fs.writeFileSync(fullPath, data);
     
     // Сохраняем в историю
+    const autoUpload = (store.get('settings') as any)?.autoUpload;
     addToHistory({
       id: Date.now().toString(),
       date: now.toISOString(),
       type: 'image',
       localPath: fullPath,
-      status: 'pending',
+      status: autoUpload ? 'uploading' : 'saved',
       size: data.length,
     });
+    if (autoUpload) uploadFile(fullPath);
     
     return fullPath;
   } catch (error) {
@@ -420,6 +422,19 @@ function addToHistory(item: any) {
   store.set('history', history);
 }
 
+function updateHistoryStatus(filePath: string, status: string, extra?: Record<string, any>) {
+  const history = (store.get('history') as any[]) || [];
+  const item = history.find((h: any) => h.localPath === filePath);
+  if (item) {
+    item.status = status;
+    if (extra) Object.assign(item, extra);
+    store.set('history', history);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('history-updated');
+  }
+}
+
 async function uploadFile(filePath: string) {
   const settings = store.get('settings') as any;
   const serverUrl = settings.serverUrl || 'http://localhost:8080';
@@ -427,28 +442,18 @@ async function uploadFile(filePath: string) {
 
   log('MAIN', `📤 Upload file: ${filePath}`, { serverUrl, hasToken: !!bearerToken });
 
+  updateHistoryStatus(filePath, 'uploading');
+
   try {
-    const fs = require('fs');
     const FormData = require('form-data');
     const form = new FormData();
     form.append('file', fs.createReadStream(filePath));
 
-    const isVideo = filePath.endsWith('.mp4');
+    const isVideo = /\.(mp4|webm|mkv|mov|avi)$/i.test(filePath);
     const endpoint = isVideo ? '/api/upload/video' : '/api/upload/image';
 
-    log('MAIN', `📡 Sending request to: ${serverUrl}${endpoint}`);
-    
-    // Логируем детали запроса
-    log('MAIN', `📋 Request details:`, {
-      method: 'POST',
-      url: serverUrl + endpoint,
-      headers: {
-        ...(bearerToken ? { 'Authorization': `Bearer ${bearerToken}` } : {}),
-      },
-      fileSize: fs.statSync(filePath).size
-    });
+    log('MAIN', `📡 Sending to: ${serverUrl}${endpoint}`);
 
-    log('MAIN', `📡 Initiating fetch request...`);
     const response = await fetch(serverUrl + endpoint, {
       method: 'POST',
       body: form,
@@ -456,40 +461,47 @@ async function uploadFile(filePath: string) {
         ...(bearerToken ? { 'Authorization': `Bearer ${bearerToken}` } : {}),
       },
     });
-    log('MAIN', `📡 Fetch request completed`);
-
-    log('MAIN', `📥 Response status: ${response.status} ${response.statusText}`);
-    log('MAIN', `📥 Response headers:`, response.headers);
 
     const result = await response.json();
-    log('MAIN', `📋 Response body:`, result);
+    log('MAIN', `📋 Response:`, result);
 
     if (result.success) {
-      // Обновляем историю
-      const history = (store.get('history') as any[]) || [];
-      const item = history.find((h: any) => h.localPath === filePath);
-      if (item) {
-        item.status = 'uploaded';
-        item.url = result.url;
-        item.fileId = result.fileId;
-      }
-      store.set('history', history);
-      log('MAIN', `✅ File uploaded successfully: ${result.url}`);
+      updateHistoryStatus(filePath, 'uploaded', { url: result.url, fileId: result.fileId });
+      log('MAIN', `✅ Uploaded: ${result.url}`);
     } else {
+      updateHistoryStatus(filePath, 'failed');
       log('MAIN', `❌ Upload failed: ${result.error}`);
     }
 
     return result;
   } catch (error: any) {
-    log('MAIN', `❌ Upload error:`, {
-      error: error.message,
-      stack: error.stack,
-      filePath,
-      serverUrl: settings.serverUrl || 'http://localhost:8080'
-    });
-    // Добавляем в очередь на повторную отправку
-    addToUploadQueue(filePath);
+    log('MAIN', `❌ Upload error: ${error.message}`);
+    updateHistoryStatus(filePath, 'failed');
     return null;
+  }
+}
+
+async function processRetryQueue() {
+  const settings = store.get('settings') as any;
+  const serverUrl = settings.serverUrl || 'http://localhost:8080';
+
+  // Проверяем доступность сервера
+  try {
+    const res = await fetch(serverUrl + '/api/health', { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return;
+  } catch {
+    return; // Сервер недоступен
+  }
+
+  // Находим файлы ожидающие загрузки или с ошибкой
+  const history = (store.get('history') as any[]) || [];
+  const toRetry = history.filter((h: any) => h.status === 'pending' || h.status === 'failed');
+
+  for (const item of toRetry) {
+    if (fs.existsSync(item.localPath)) {
+      log('MAIN', `🔄 Auto-retrying upload: ${item.localPath}`);
+      await uploadFile(item.localPath);
+    }
   }
 }
 
@@ -613,7 +625,7 @@ ipcMain.handle('save-fullscreen-screenshot', (_, imageData: string) => {
       date: now.toISOString(),
       type: 'image',
       localPath: fullPath,
-      status: settings.autoUpload ? 'uploading' : 'pending',
+      status: settings.autoUpload ? 'uploading' : 'saved',
       size: buffer.length,
     });
 
@@ -797,7 +809,7 @@ ipcMain.handle('save-edited-image', (_, buffer: Buffer) => {
       date: now.toISOString(),
       type: 'image',
       localPath: fullPath,
-      status: settings.autoUpload ? 'uploading' : 'pending',
+      status: settings.autoUpload ? 'uploading' : 'saved',
       size: buffer.length,
     });
 
@@ -1001,7 +1013,7 @@ ipcMain.handle('save-video-local', (_, tempPath: string) => {
       date: now.toISOString(),
       type: 'video',
       localPath: fullPath,
-      status: 'pending',
+      status: 'saved',
       size,
     });
 
@@ -1059,6 +1071,10 @@ app.whenReady().then(() => {
   createTray();
   createMainWindow();
   registerHotkeys();
+
+  // Авторетрай: при старте и каждые 30 секунд
+  setTimeout(() => processRetryQueue(), 5000);
+  setInterval(() => processRetryQueue(), 30000);
 });
 
 app.on('window-all-closed', () => {
