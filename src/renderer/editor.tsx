@@ -339,61 +339,18 @@ function Editor() {
     }
   }
 
-  async function handleUploadToServer() {
+  function handleUploadToServer() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] [EDITOR] 📤 Starting upload to server`);
+    const dataUrl = canvas.toDataURL('image/png');
+    const buffer = Buffer.from(dataUrl.replace(/^data:image\/png;base64,/, ''), 'base64');
 
-    try {
-      console.log(`[${timestamp}] [EDITOR] 🖼️ Converting canvas to data URL...`);
-      const dataUrl = canvas.toDataURL('image/png');
-      console.log(`[${timestamp}] [EDITOR] 🔄 Converting data URL to buffer...`);
-      const buffer = Buffer.from(dataUrl.replace(/^data:image\/png;base64,/, ''), 'base64');
-      console.log(`[${timestamp}] [EDITOR] 📦 Image buffer size:`, buffer.length, 'bytes');
+    // Запускаем загрузку в фоне — URL скопируется в буфер обмена по завершении
+    ipcRenderer.invoke('upload-image-to-server', buffer);
 
-      // Отправляем в main процесс для загрузки на сервер
-      console.log(`[${timestamp}] [EDITOR] 📡 Sending to main process...`);
-      console.log(`[${timestamp}] [EDITOR] 📊 Buffer details:`, {
-        length: buffer.length,
-        type: typeof buffer,
-        isBuffer: Buffer.isBuffer(buffer)
-      });
-      console.log(`[${timestamp}] [EDITOR] 🚀 Initiating IPC call to upload-image-to-server...`);
-      const result = await ipcRenderer.invoke('upload-image-to-server', buffer);
-      console.log(`[${timestamp}] [EDITOR] ✅ IPC call completed, received response:`, result);
-
-      if (result?.success) {
-        console.log(`[${timestamp}] [EDITOR] ✅ Uploaded to server:`, result.url);
-        // Копируем ссылку в буфер
-        console.log(`[${timestamp}] [EDITOR] 📋 Copying URL to clipboard...`);
-        try {
-          await navigator.clipboard.writeText(result.url);
-          console.log(`[${timestamp}] [EDITOR] ✅ URL copied to clipboard`);
-        } catch (clipboardError: any) {
-          console.error(`[${timestamp}] [EDITOR] ❌ Clipboard error:`, {
-            message: clipboardError.message,
-            stack: clipboardError.stack
-          });
-        }
-        alert(`Загружено на сервер!\nСсылка скопирована в буфер:\n${result.url}`);
-        // Закрываем редактор
-        console.log(`[${timestamp}] [EDITOR] 🚪 Closing editor window...`);
-        ipcRenderer.send('close-editor-window');
-      } else {
-        console.error(`[${timestamp}] [EDITOR] ❌ Server error:`, result?.error);
-        alert(`Ошибка загрузки: ${result?.error || 'Неизвестная ошибка'}`);
-      }
-    } catch (error: any) {
-      console.error(`[${timestamp}] [EDITOR] ❌ Upload error:`, {
-        message: error.message,
-        stack: error.stack,
-        name: error.name,
-        source: 'handleUploadToServer'
-      });
-      alert('Ошибка при загрузке на сервер');
-    }
+    // Закрываем окно сразу
+    ipcRenderer.send('close-editor-window');
   }
 
   return (

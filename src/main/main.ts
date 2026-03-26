@@ -1,14 +1,33 @@
-import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, screen, nativeImage, clipboard, session, desktopCapturer } from 'electron';
+import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, screen, nativeImage, clipboard, session, desktopCapturer, shell } from 'electron';
 import path from 'path';
 import Store from 'electron-store';
 import screenshot from 'screenshot-desktop';
 import fs from 'fs';
 
-// Вспомогательная функция для логирования с меткой времени
+// ─── Файловый логгер ───────────────────────────────────────────────────────
+let logStream: fs.WriteStream | null = null;
+
+function initLogFile() {
+  try {
+    const exeDir = path.dirname(app.getPath('exe'));
+    const logDir = path.join(exeDir, 'logs');
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+    const date = new Date().toISOString().split('T')[0];
+    const logFile = path.join(logDir, `app-${date}.log`);
+    logStream = fs.createWriteStream(logFile, { flags: 'a' });
+    logStream.write(`\n${'='.repeat(60)}\n APP START  ${new Date().toISOString()}\n${'='.repeat(60)}\n`);
+    logStream.write(` exe: ${app.getPath('exe')}\n logDir: ${logDir}\n\n`);
+  } catch (e) {
+    console.error('Failed to init log file:', e);
+  }
+}
+
 const log = (module: string, message: string, data?: any) => {
   const timestamp = new Date().toISOString();
-  const dataStr = data ? ` | ${JSON.stringify(data)}` : '';
-  console.log(`[${timestamp}] [${module}] ${message}${dataStr}`);
+  const dataStr = data !== undefined ? ` | ${JSON.stringify(data)}` : '';
+  const line = `[${timestamp}] [${module}] ${message}${dataStr}`;
+  console.log(line);
+  if (logStream) logStream.write(line + '\n');
 };
 
 // Инициализация хранилища
@@ -67,32 +86,45 @@ let isRecording = false;
 let pendingEditorImagePath: string | null = null;
 let pendingFullscreenImagePath: string | null = null;
 
-// Установка default значений
-const initializeSettings = () => {
-  const settings = store.get('settings') as any;
-  if (!settings || !settings.savePath) {
-    store.set('settings.savePath', app.getPath('pictures'));
-  }
-};
-
-store.set('settings', {
-  savePath: '', // будет установлено при инициализации
+// ─── Дефолтные настройки — используются только для заполнения отсутствующих полей ─
+const DEFAULT_SETTINGS: Record<string, any> = {
+  savePath: '',
   serverUrl: 'http://localhost:8080',
   bearerToken: '',
   autoUpload: false,
+  yadiskToken: '',
+  yadiskFolder: '/Skrinshot',
+  yadiskAutoUpload: false,
+  yadiskClientId: '',
   imageFormat: 'png',
   imageQuality: 90,
   videoFps: 30,
   videoBitrate: '5M',
+  videoFormat: 'mp4',
+  videoMicDeviceId: '',
+  videoSystemAudio: true,
   fileNameTemplate: 'screenshot_{YYYY}-{MM}-{DD}_{HH}-{mm}-{ss}',
   hotkeys: {
-    capture: 'F1',
-    captureArea: 'Ctrl+F1',
-    record: 'Shift+F1',
+    capture: 'PrintScreen',
+    captureArea: 'Ctrl+PrintScreen',
+    record: 'Shift+PrintScreen',
+    recordArea: 'Ctrl+Shift+PrintScreen',
   },
   autoLaunch: false,
   theme: 'light',
-});
+};
+
+// Мёрджим дефолты с сохранёнными настройками — НЕ перезаписываем существующие
+const initializeSettings = () => {
+  const saved = (store.get('settings') as Record<string, any>) || {};
+  const merged: Record<string, any> = { ...DEFAULT_SETTINGS, ...saved };
+  // Мёрджим вложенный объект hotkeys отдельно
+  merged.hotkeys = { ...DEFAULT_SETTINGS.hotkeys, ...(saved.hotkeys || {}) };
+  // savePath: если пустой — ставим папку Картинки
+  if (!merged.savePath) merged.savePath = app.getPath('pictures');
+  store.set('settings', merged);
+  log('MAIN', 'Settings initialized', { yadiskClientId: !!merged.yadiskClientId, yadiskToken: !!merged.yadiskToken });
+};
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -212,7 +244,14 @@ function createRecordingWindow(selectArea = false) {
 }
 
 function createEditorWindow(imagePath?: string) {
+  log('MAIN', '[createEditorWindow] called', { imagePath, isDev });
   pendingEditorImagePath = imagePath || null;
+
+  if (editorWindow && !editorWindow.isDestroyed()) {
+    log('MAIN', '[createEditorWindow] editor already open, focusing');
+    editorWindow.focus();
+    return;
+  }
 
   editorWindow = new BrowserWindow({
     width: 1200,
@@ -223,19 +262,29 @@ function createEditorWindow(imagePath?: string) {
     },
   });
 
-  // В development-режиме используем Vite dev server
+  editorWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    log('MAIN', '[editor] did-fail-load', { code, desc, url });
+  });
+  editorWindow.webContents.on('did-finish-load', () => {
+    log('MAIN', '[editor] did-finish-load OK');
+  });
+
   if (isDev) {
-    editorWindow.loadURL(`${VITE_DEV_SERVER_URL}/editor.html`);
+    const url = `${VITE_DEV_SERVER_URL}/editor.html`;
+    log('MAIN', '[createEditorWindow] loadURL dev', { url });
+    editorWindow.loadURL(url);
   } else {
     const editorPath = getEditorHtmlPath();
+    log('MAIN', '[createEditorWindow] loadFile prod', { editorPath, exists: fileExists(editorPath) });
     if (fileExists(editorPath)) {
       editorWindow.loadFile(editorPath);
     } else {
-      console.error('[createEditorWindow] Editor file not found:', editorPath);
+      log('MAIN', '[createEditorWindow] ERROR: editor file not found', { editorPath, resourcesPath: process.resourcesPath });
     }
   }
 
   editorWindow.on('closed', () => {
+    log('MAIN', '[editor] window closed');
     editorWindow = null;
     pendingEditorImagePath = null;
   });
@@ -311,35 +360,32 @@ function showMainWindow(page?: string) {
 }
 
 async function handleCapture() {
+  log('MAIN', '[handleCapture] START');
   try {
-    console.log('[handleCapture] Starting full screen capture...');
+    if (!mainWindow) createMainWindow();
 
-    // Проверяем что mainWindow существует
-    if (!mainWindow) {
-      console.log('[handleCapture] mainWindow is null, creating...');
-      createMainWindow();
-    }
-
-    // Делаем скриншот всего экрана через screenshot-desktop
+    log('MAIN', '[handleCapture] taking screenshot via screenshot-desktop');
     const imgBuffer = await screenshot({ format: 'png' });
-    console.log('[handleCapture] Screenshot buffer size:', imgBuffer.length);
+    log('MAIN', '[handleCapture] screenshot done', { size: imgBuffer.length });
 
     const screenshotImage = nativeImage.createFromBuffer(Buffer.from(imgBuffer));
-    console.log('[handleCapture] NativeImage created, size:', screenshotImage.getSize());
-
-    // Сохраняем во временный файл
     const tempImagePath = path.join(app.getPath('temp'), `skrinshot_full_${Date.now()}.png`);
-    const fs = require('fs');
-    const data = screenshotImage.toPNG();
-    fs.writeFileSync(tempImagePath, data);
-    console.log('[handleCapture] Temp image saved to:', tempImagePath);
+    fs.writeFileSync(tempImagePath, screenshotImage.toPNG());
+    log('MAIN', '[handleCapture] temp saved', { tempImagePath });
 
-    // Открываем capture-окно с встроенным редактором (минуя фазу выделения)
+    // Если capture-окно уже открыто — закрываем его сначала, иначе оно не увидит новый путь
+    if (captureWindow && !captureWindow.isDestroyed()) {
+      log('MAIN', '[handleCapture] captureWindow already open, closing it first');
+      captureWindow.close();
+      captureWindow = null;
+      await new Promise(r => setTimeout(r, 100));
+    }
+
     pendingFullscreenImagePath = tempImagePath;
+    log('MAIN', '[handleCapture] pendingFullscreenImagePath set, opening captureWindow');
     createCaptureWindow();
-    console.log('[handleCapture] Capture window created for fullscreen edit');
-  } catch (error) {
-    console.error('[handleCapture] Error:', error);
+  } catch (error: any) {
+    log('MAIN', '[handleCapture] ERROR', { message: error.message, stack: error.stack });
   }
 }
 
@@ -394,16 +440,17 @@ function saveScreenshot(image: Electron.NativeImage): string | null {
     fs.writeFileSync(fullPath, data);
     
     // Сохраняем в историю
-    const autoUpload = (store.get('settings') as any)?.autoUpload;
+    const s = store.get('settings') as any;
+    const willUpload = s?.autoUpload || (s?.yadiskAutoUpload && s?.yadiskToken);
     addToHistory({
       id: Date.now().toString(),
       date: now.toISOString(),
       type: 'image',
       localPath: fullPath,
-      status: autoUpload ? 'uploading' : 'saved',
+      status: willUpload ? 'uploading' : 'saved',
       size: data.length,
     });
-    if (autoUpload) uploadFile(fullPath);
+    if (willUpload) triggerAutoUpload(fullPath);
     
     return fullPath;
   } catch (error) {
@@ -481,27 +528,155 @@ async function uploadFile(filePath: string) {
   }
 }
 
-async function processRetryQueue() {
+async function uploadToYandexDisk(filePath: string) {
   const settings = store.get('settings') as any;
-  const serverUrl = settings.serverUrl || 'http://localhost:8080';
-
-  // Проверяем доступность сервера
-  try {
-    const res = await fetch(serverUrl + '/api/health', { signal: AbortSignal.timeout(3000) });
-    if (!res.ok) return;
-  } catch {
-    return; // Сервер недоступен
+  const token = settings.yadiskToken || '';
+  if (!token) {
+    log('MAIN', '❌ uploadToYandexDisk: no token');
+    return null;
   }
 
-  // Находим файлы ожидающие загрузки или с ошибкой
-  const history = (store.get('history') as any[]) || [];
-  const toRetry = history.filter((h: any) => h.status === 'pending' || h.status === 'failed');
+  const folder = (settings.yadiskFolder || '/Skrinshot').replace(/\/$/, '');
+  const fileName = path.basename(filePath);
+  const remotePath = `${folder}/${fileName}`;
 
-  for (const item of toRetry) {
-    if (fs.existsSync(item.localPath)) {
-      log('MAIN', `🔄 Auto-retrying upload: ${item.localPath}`);
-      await uploadFile(item.localPath);
+  log('MAIN', `📤 Yandex Disk upload START`, { filePath, remotePath, fileExists: fs.existsSync(filePath) });
+  updateHistoryStatus(filePath, 'uploading');
+
+  try {
+    // Создаём папку если не существует
+    const mkdirRes = await fetch(`https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(folder)}`, {
+      method: 'PUT',
+      headers: { 'Authorization': `OAuth ${token}` },
+    });
+    log('MAIN', `📁 mkdir status: ${mkdirRes.status}`);
+
+    // Получаем URL для загрузки
+    const uploadUrlRes = await fetch(
+      `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(remotePath)}&overwrite=true`,
+      { headers: { 'Authorization': `OAuth ${token}` } }
+    );
+    const uploadUrlBody = await uploadUrlRes.json();
+    log('MAIN', `🔗 get upload URL: status=${uploadUrlRes.status}`, uploadUrlBody);
+    if (!uploadUrlRes.ok) {
+      updateHistoryStatus(filePath, 'failed');
+      return null;
     }
+    const uploadUrl = uploadUrlBody.href;
+
+    // Загружаем файл
+    const fileContent = fs.readFileSync(filePath);
+    log('MAIN', `⬆️  PUT file size=${fileContent.length}`);
+    const putRes = await fetch(uploadUrl, {
+      method: 'PUT',
+      body: fileContent,
+    });
+    log('MAIN', `⬆️  PUT status: ${putRes.status}`);
+    if (!putRes.ok) {
+      updateHistoryStatus(filePath, 'failed');
+      return null;
+    }
+
+    // Публикуем файл
+    const pubRes = await fetch(
+      `https://cloud-api.yandex.net/v1/disk/resources/publish?path=${encodeURIComponent(remotePath)}`,
+      { method: 'PUT', headers: { 'Authorization': `OAuth ${token}` } }
+    );
+    log('MAIN', `🌐 publish status: ${pubRes.status}`);
+
+    // Получаем публичную ссылку
+    const infoRes = await fetch(
+      `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(remotePath)}&fields=public_url`,
+      { headers: { 'Authorization': `OAuth ${token}` } }
+    );
+    const info = await infoRes.json();
+    log('MAIN', `ℹ️  resource info:`, info);
+    const publicUrl = info.public_url;
+
+    if (publicUrl) {
+      updateHistoryStatus(filePath, 'uploaded', { url: publicUrl });
+      log('MAIN', `✅ Yandex Disk uploaded: ${publicUrl}`);
+      return { success: true, url: publicUrl };
+    } else {
+      updateHistoryStatus(filePath, 'failed');
+      log('MAIN', `❌ Yandex Disk: no public_url in response`);
+      return null;
+    }
+  } catch (error: any) {
+    log('MAIN', `❌ Yandex Disk error: ${error.message}`);
+    updateHistoryStatus(filePath, 'failed');
+    return null;
+  }
+}
+
+async function transcodeToMp4(inputPath: string, outputPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let ffmpegPath: string = require('ffmpeg-static');
+    if (app.isPackaged) {
+      ffmpegPath = ffmpegPath.replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep);
+      ffmpegPath = ffmpegPath.replace('app.asar/', 'app.asar.unpacked/');
+    }
+    log('MAIN', '[transcodeToMp4]', { inputPath, outputPath, ffmpegPath });
+    const ffmpeg = require('fluent-ffmpeg');
+    ffmpeg.setFfmpegPath(ffmpegPath);
+    ffmpeg(inputPath)
+      .output(outputPath)
+      .videoCodec('libx264')
+      .outputOptions([
+        '-preset', 'ultrafast',
+        '-crf', '28',
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        '-f', 'mp4',
+      ])
+      .noAudio()
+      .on('end', () => { log('MAIN', '[transcodeToMp4] done'); resolve(); })
+      .on('error', (err: Error) => { log('MAIN', '[transcodeToMp4] error', { message: err.message }); reject(err); })
+      .run();
+  });
+}
+
+function triggerAutoUpload(filePath: string) {
+  const settings = store.get('settings') as any;
+  if (settings.autoUpload) uploadFile(filePath);
+  if (settings.yadiskAutoUpload && settings.yadiskToken) uploadToYandexDisk(filePath);
+}
+
+let retryQueueRunning = false;
+
+async function processRetryQueue() {
+  if (retryQueueRunning) return;
+  retryQueueRunning = true;
+  try {
+    const settings = store.get('settings') as any;
+
+    // Ретраим только если есть куда загружать
+    const hasServer = !!settings.serverUrl;
+    const hasYadisk = !!settings.yadiskToken;
+    if (!hasServer && !hasYadisk) return;
+
+    if (hasServer) {
+      // Проверяем доступность сервера
+      try {
+        const res = await fetch(settings.serverUrl + '/api/health', { signal: AbortSignal.timeout(3000) });
+        if (!res.ok) return;
+      } catch {
+        return; // Сервер недоступен — не ретраим
+      }
+    }
+
+    const history = (store.get('history') as any[]) || [];
+    const toRetry = history.filter((h: any) => h.status === 'pending' || h.status === 'failed');
+
+    for (const item of toRetry) {
+      if (fs.existsSync(item.localPath)) {
+        log('MAIN', `🔄 Auto-retrying upload: ${item.localPath}`);
+        if (hasYadisk) await uploadToYandexDisk(item.localPath);
+        else await uploadFile(item.localPath);
+      }
+    }
+  } finally {
+    retryQueueRunning = false;
   }
 }
 
@@ -550,12 +725,14 @@ function registerHotkeys() {
 
 // IPC handlers
 ipcMain.handle('get-pending-fullscreen', () => {
+  log('MAIN', '[get-pending-fullscreen]', { path: pendingFullscreenImagePath });
   const p = pendingFullscreenImagePath;
   pendingFullscreenImagePath = null;
   return p;
 });
 
 ipcMain.handle('get-pending-image', () => {
+  log('MAIN', '[get-pending-image]', { path: pendingEditorImagePath });
   const path = pendingEditorImagePath;
   pendingEditorImagePath = null;
   return path;
@@ -625,13 +802,13 @@ ipcMain.handle('save-fullscreen-screenshot', (_, imageData: string) => {
       date: now.toISOString(),
       type: 'image',
       localPath: fullPath,
-      status: settings.autoUpload ? 'uploading' : 'saved',
+      status: (settings.autoUpload || (settings.yadiskAutoUpload && settings.yadiskToken)) ? 'uploading' : 'saved',
       size: buffer.length,
     });
 
-    if (settings.autoUpload) {
+    if (settings.autoUpload || (settings.yadiskAutoUpload && settings.yadiskToken)) {
       log('MAIN', '[save-fullscreen-screenshot] Auto-upload enabled, uploading...');
-      uploadFile(fullPath);
+      triggerAutoUpload(fullPath);
     }
 
     createEditorWindow(fullPath);
@@ -648,8 +825,80 @@ ipcMain.handle('get-upload-queue', () => {
   return store.get('uploadQueue') || [];
 });
 
+ipcMain.handle('yadisk-auth', (_, clientId: string): Promise<{ success: boolean; token?: string; error?: string }> => {
+  return new Promise((resolve) => {
+    const REDIRECT_URI = 'https://oauth.yandex.ru/verification_code';
+    const authUrl = `https://oauth.yandex.ru/authorize?response_type=token&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`;
+
+    // persist: сохраняет сессию Яндекса между запусками — второй раз уже без логина
+    const authWindow = new BrowserWindow({
+      width: 500,
+      height: 660,
+      title: 'Вход в Яндекс',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        partition: 'persist:yandex-auth',
+      },
+      autoHideMenuBar: true,
+    });
+
+    let resolved = false;
+    function done(result: { success: boolean; token?: string; error?: string }) {
+      if (resolved) return;
+      resolved = true;
+      if (!authWindow.isDestroyed()) authWindow.close();
+      resolve(result);
+    }
+
+    // Вариант 1: токен в хэше URL (некоторые конфиги Яндекса)
+    authWindow.webContents.on('will-redirect', (_e, url) => {
+      if (url.startsWith(REDIRECT_URI)) {
+        const hash = url.includes('#') ? url.split('#')[1] : '';
+        const params = new URLSearchParams(hash);
+        const token = params.get('access_token');
+        if (token) done({ success: true, token });
+      }
+    });
+
+    // Вариант 2: Яндекс показывает токен как текст на странице verification_code
+    authWindow.webContents.on('did-navigate', async (_e, url) => {
+      if (!url.startsWith(REDIRECT_URI)) return;
+      try {
+        // Ждём загрузки содержимого страницы
+        await new Promise(r => setTimeout(r, 500));
+        const pageText: string = await authWindow.webContents.executeJavaScript(
+          `document.body.innerText`
+        );
+        // Ищем токен — он начинается с y0_ или AQAAA и состоит из base64-символов
+        const match = pageText.match(/y0_[A-Za-z0-9_\-]{20,}|AQAAA[A-Za-z0-9_\-]{20,}/);
+        if (match) {
+          done({ success: true, token: match[0] });
+        } else {
+          // Последний шанс — весь текст страницы (токен занимает всю строку)
+          const trimmed = pageText.trim().split(/\s+/)[0];
+          if (trimmed && trimmed.length > 30) {
+            done({ success: true, token: trimmed });
+          }
+        }
+      } catch {}
+    });
+
+    authWindow.on('closed', () => done({ success: false, error: 'Окно закрыто' }));
+    authWindow.loadURL(authUrl);
+  });
+});
+
 ipcMain.handle('retry-upload', (_, filePath: string) => {
-  log('MAIN', '[retry-upload] Retrying upload:', filePath);
+  const settings = store.get('settings') as any;
+  const useYadisk = settings.yadiskAutoUpload && settings.yadiskToken;
+  const useServer = settings.autoUpload && settings.serverUrl;
+  log('MAIN', '[retry-upload]', { filePath, useYadisk, useServer });
+
+  if (!useYadisk && !useServer) {
+    return { success: false, error: 'Загрузка не настроена. Включите автозагрузку в разделе «Сервер».' };
+  }
+  if (useYadisk) return uploadToYandexDisk(filePath);
   return uploadFile(filePath);
 });
 
@@ -809,13 +1058,13 @@ ipcMain.handle('save-edited-image', (_, buffer: Buffer) => {
       date: now.toISOString(),
       type: 'image',
       localPath: fullPath,
-      status: settings.autoUpload ? 'uploading' : 'saved',
+      status: (settings.autoUpload || (settings.yadiskAutoUpload && settings.yadiskToken)) ? 'uploading' : 'saved',
       size: buffer.length,
     });
 
-    if (settings.autoUpload) {
+    if (settings.autoUpload || (settings.yadiskAutoUpload && settings.yadiskToken)) {
       log('MAIN', '[save-edited-image] Auto-upload enabled, uploading...');
-      uploadFile(fullPath);
+      triggerAutoUpload(fullPath);
     }
 
     return { success: true, path: fullPath };
@@ -839,10 +1088,25 @@ ipcMain.handle('copy-image-to-clipboard', (_, buffer: Buffer) => {
   }
 });
 
-// Обработчик для загрузки изображения на сервер
+// Обработчик для загрузки изображения на сервер (или Яндекс Диск)
 ipcMain.handle('upload-image-to-server', async (_, buffer: Buffer) => {
   try {
     const settings = store.get('settings') as any;
+
+    // Если настроен Яндекс Диск — грузим туда
+    if (settings.yadiskAutoUpload && settings.yadiskToken) {
+      log('MAIN', '[upload-image-to-server] routing to Yandex Disk', { bufferSize: buffer.length });
+      const tempFilePath = path.join(app.getPath('temp'), `skrinshot_upload_${Date.now()}.png`);
+      fs.writeFileSync(tempFilePath, buffer);
+      const result = await uploadToYandexDisk(tempFilePath);
+      try { fs.unlinkSync(tempFilePath); } catch {}
+      if (result?.success && result?.url) {
+        clipboard.writeText(result.url);
+        log('MAIN', '[upload-image-to-server] URL copied to clipboard', { url: result.url });
+      }
+      return result || { success: false, error: 'Ошибка загрузки на Яндекс Диск' };
+    }
+
     const serverUrl = settings.serverUrl || 'http://localhost:8080';
     const bearerToken = settings.bearerToken || '';
 
@@ -850,7 +1114,6 @@ ipcMain.handle('upload-image-to-server', async (_, buffer: Buffer) => {
 
     // Сохраняем во временный файл для загрузки
     const tempFilePath = path.join(app.getPath('temp'), `skrinshot_upload_${Date.now()}.png`);
-    const fs = require('fs');
     fs.writeFileSync(tempFilePath, buffer);
     log('MAIN', '[upload-image-to-server] Temp file created:', tempFilePath);
 
@@ -931,6 +1194,10 @@ ipcMain.handle('upload-image-to-server', async (_, buffer: Buffer) => {
                 fileId: result.fileId,
                 size: buffer.length,
               });
+              if (result.url) {
+                clipboard.writeText(result.url);
+                log('MAIN', '[upload-image-to-server] URL copied to clipboard', { url: result.url });
+              }
               log('MAIN', '[upload-image-to-server] ✅ Upload successful:', result.url);
               resolve({ success: true, url: result.url, fileId: result.fileId });
             } else {
@@ -987,10 +1254,10 @@ ipcMain.handle('save-video-temp', (_, videoData: Buffer) => {
 });
 
 // Сохраняем видео в финальное место
-ipcMain.handle('save-video-local', (_, tempPath: string) => {
+ipcMain.handle('save-video-local', async (_, tempPath: string) => {
   try {
-    const fs = require('fs');
     const settings = store.get('settings') as any;
+    const videoFormat: string = settings.videoFormat || 'mp4';
     const imageTemplate = settings.fileNameTemplate || 'screenshot_{YYYY}-{MM}-{DD}_{HH}-{mm}-{ss}';
     const template = imageTemplate.replace(/^screenshot/, 'video');
     const now = new Date();
@@ -1003,9 +1270,16 @@ ipcMain.handle('save-video-local', (_, tempPath: string) => {
       .replace('{ss}', String(now.getSeconds()).padStart(2, '0'));
 
     const savePath = settings.savePath || app.getPath('videos');
-    const fullPath = path.join(savePath, `${fileName}.webm`);
-    fs.copyFileSync(tempPath, fullPath);
-    fs.unlinkSync(tempPath);
+    const fullPath = path.join(savePath, `${fileName}.${videoFormat}`);
+
+    if (videoFormat === 'mp4') {
+      log('MAIN', '[save-video-local] transcoding webm → mp4', { tempPath, fullPath });
+      await transcodeToMp4(tempPath, fullPath);
+      try { fs.unlinkSync(tempPath); } catch {}
+    } else {
+      fs.copyFileSync(tempPath, fullPath);
+      fs.unlinkSync(tempPath);
+    }
 
     const size = fs.statSync(fullPath).size;
     addToHistory({
@@ -1017,22 +1291,49 @@ ipcMain.handle('save-video-local', (_, tempPath: string) => {
       size,
     });
 
+    log('MAIN', '[save-video-local] saved', { fullPath, format: videoFormat });
     return { success: true, path: fullPath };
   } catch (error: any) {
+    log('MAIN', '[save-video-local] ERROR', { message: error.message });
     return { success: false, error: error.message };
   }
 });
 
-// Загружаем видео на сервер
+// Загружаем видео (на сервер или Яндекс Диск в зависимости от настроек)
 ipcMain.handle('upload-video', async (_, tempPath: string) => {
   try {
-    const result = await uploadFile(tempPath);
-    if (result && result.success) {
-      const fs = require('fs');
+    const settings = store.get('settings') as any;
+    const videoFormat: string = settings.videoFormat || 'mp4';
+    log('MAIN', '[upload-video] start', { tempPath, videoFormat, yadiskToken: !!settings.yadiskToken, serverUrl: settings.serverUrl });
+
+    // Конвертируем в mp4 если нужно
+    let uploadPath = tempPath;
+    if (videoFormat === 'mp4' && tempPath.endsWith('.webm')) {
+      const mp4Path = tempPath.replace('.webm', '.mp4');
+      log('MAIN', '[upload-video] transcoding webm → mp4', { mp4Path });
+      await transcodeToMp4(tempPath, mp4Path);
       try { fs.unlinkSync(tempPath); } catch {}
+      uploadPath = mp4Path;
     }
+
+    let result: any = null;
+    if (settings.yadiskToken) {
+      result = await uploadToYandexDisk(uploadPath);
+    } else {
+      result = await uploadFile(uploadPath);
+    }
+
+    if (result && result.success) {
+      try { fs.unlinkSync(uploadPath); } catch {}
+      if (result.url) {
+        clipboard.writeText(result.url);
+        log('MAIN', '[upload-video] URL copied to clipboard', { url: result.url });
+      }
+    }
+    log('MAIN', '[upload-video] result', result);
     return result || { success: false, error: 'Ошибка загрузки' };
   } catch (error: any) {
+    log('MAIN', '[upload-video] ERROR', { message: error.message });
     return { success: false, error: error.message };
   }
 });
@@ -1058,8 +1359,39 @@ ipcMain.on('set-ignore-mouse-events', (_, ignore: boolean) => {
   }
 });
 
+// Кастомный протокол для OAuth Яндекс (skrinshot://oauth/callback)
+app.setAsDefaultProtocolClient('skrinshot');
+
+function handleYadiskOAuthUrl(url: string) {
+  // url вида: skrinshot://oauth/callback#access_token=TOKEN&...
+  const hash = url.includes('#') ? url.split('#')[1] : '';
+  const params = new URLSearchParams(hash);
+  const token = params.get('access_token');
+  log('MAIN', `[yadisk-oauth] Deep link received, token=${!!token}`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('yadisk-token-received', token || null);
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
+
+// Windows: второй экземпляр получает URL через argv
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_e, argv) => {
+    const deepLink = argv.find(a => a.startsWith('skrinshot://'));
+    if (deepLink) handleYadiskOAuthUrl(deepLink);
+    if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
+  });
+}
+
 // App lifecycle
 app.whenReady().then(() => {
+  initLogFile();
+  log('MAIN', 'App ready', { isDev, resourcesPath: process.resourcesPath });
+
   // Разрешаем захват экрана для записи (Electron 28+)
   session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] }).then(sources => {

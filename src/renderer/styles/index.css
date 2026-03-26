@@ -162,59 +162,83 @@ body {
 }
 
 .type-badge {
-  display: inline-block;
-  padding: 4px 8px;
-  background: var(--bg-tertiary);
-  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
   font-size: 13px;
+  font-weight: 500;
+}
+
+.tb-image {
+  background: #e8f0fb;
+  color: #2563b0;
+}
+
+.tb-video {
+  background: #fce8ff;
+  color: #8b2db0;
 }
 
 .status-badge {
   display: inline-block;
   padding: 4px 10px;
-  border-radius: 12px;
+  border-radius: 20px;
   font-size: 12px;
   font-weight: 500;
+  white-space: nowrap;
 }
 
-.status-pending {
-  background: #fff3cd;
-  color: #856404;
-}
+.st-saved     { background: #e8f5e9; color: #2e7d32; }
+.st-pending   { background: #fff8e1; color: #f57f17; }
+.st-uploading { background: #e3f2fd; color: #1565c0; }
+.st-uploaded  { background: #e8f5e9; color: #1b5e20; }
+.st-failed    { background: #fce4ec; color: #b71c1c; }
 
-.status-uploading {
-  background: #cce5ff;
-  color: #004085;
-}
+.td-date { white-space: nowrap; color: var(--text-secondary); font-size: 13px; }
+.td-size { color: var(--text-secondary); font-size: 13px; }
 
-.status-uploaded {
-  background: #d4edda;
-  color: #155724;
-}
-
-.status-failed {
-  background: #f8d7da;
-  color: #721c24;
-}
-
-.actions {
+/* History action buttons */
+.h-actions {
   display: flex;
-  gap: 4px;
+  align-items: center;
+  gap: 2px;
 }
 
-.actions button {
-  padding: 6px 10px;
+.ha-btn {
+  width: 30px;
+  height: 30px;
   border: none;
   background: transparent;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
-  font-size: 16px;
-  transition: background 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  transition: background 0.15s, color 0.15s;
 }
 
-.actions button:hover {
+.ha-btn:hover {
   background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
+
+.ha-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ha-upload { color: var(--primary-color); }
+.ha-upload:hover { background: #e8f0fb; color: var(--primary-hover); }
+
+.ha-copy { color: #2e7d32; }
+.ha-copy:hover { background: #e8f5e9; }
+
+.ha-copied { color: #2e7d32 !important; background: #e8f5e9 !important; }
+
+.ha-delete:hover { background: #fce4ec; color: #b71c1c; }
 
 /* Settings layout — sidebar + content */
 .settings-layout {
@@ -612,6 +636,119 @@ body {
 .sp-saved {
   font-size: 13px;
   color: var(--success-color);
+}
+
+/* Upload blocks (Server / Yandex Disk) */
+.history-warning {
+  margin: 0 0 12px 0;
+  padding: 10px 14px;
+  background: color-mix(in srgb, #f59e0b 12%, transparent);
+  border: 1px solid color-mix(in srgb, #f59e0b 40%, transparent);
+  border-radius: 6px;
+  font-size: 13px;
+  color: #92400e;
+  cursor: pointer;
+}
+
+.dark .history-warning {
+  color: #fde68a;
+}
+
+.sp-upload-block {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  background: var(--bg-secondary);
+}
+
+.sp-upload-block-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.sp-upload-block-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sp-upload-block--yadisk .sp-upload-block-header {
+  color: #f00;
+}
+
+.sp-yadisk-icon {
+  color: #f00;
+  flex-shrink: 0;
+}
+
+.sp-link {
+  color: var(--primary-color);
+  text-decoration: none;
+}
+
+.sp-link:hover {
+  text-decoration: underline;
+}
+
+.sp-yadisk-login-btn {
+  margin-top: 10px;
+  width: 100%;
+  padding: 10px 16px;
+  background: #fc3f1d;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.sp-yadisk-login-btn:hover:not(:disabled) {
+  background: #e63519;
+}
+
+.sp-yadisk-login-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sp-yadisk-authed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--success-color) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success-color) 30%, transparent);
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.sp-yadisk-authed-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--success-color);
+}
+
+.sp-yadisk-logout {
+  padding: 5px 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: background 0.15s;
+}
+
+.sp-yadisk-logout:hover {
+  background: var(--bg-tertiary);
 }
 
 .btn-primary {

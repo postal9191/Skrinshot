@@ -7,10 +7,15 @@ interface Settings {
   serverUrl: string;
   bearerToken: string;
   autoUpload: boolean;
+  yadiskToken: string;
+  yadiskFolder: string;
+  yadiskAutoUpload: boolean;
+  yadiskClientId: string;
   imageFormat: 'png' | 'jpg';
   imageQuality: number;
   videoFps: 15 | 30 | 60;
   videoBitrate: string;
+  videoFormat: 'mp4' | 'webm';
   videoMicDeviceId: string;
   videoSystemAudio: boolean;
   fileNameTemplate: string;
@@ -29,10 +34,15 @@ const defaultSettings: Settings = {
   serverUrl: 'http://localhost:8080',
   bearerToken: '',
   autoUpload: false,
+  yadiskToken: '',
+  yadiskFolder: '/Skrinshot',
+  yadiskAutoUpload: false,
+  yadiskClientId: '',
   imageFormat: 'png',
   imageQuality: 90,
   videoFps: 30,
   videoBitrate: '5M',
+  videoFormat: 'mp4',
   videoMicDeviceId: '',
   videoSystemAudio: true,
   fileNameTemplate: 'screenshot_{YYYY}-{MM}-{DD}_{HH}-{mm}-{ss}',
@@ -145,6 +155,7 @@ export function Settings() {
   const [saved, setSaved] = useState(false);
   const [activeSection, setActiveSection] = useState<Section>('general');
   const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
+  const [yadiskAuthLoading, setYadiskAuthLoading] = useState(false);
 
   useEffect(() => { loadSettings(); loadMicDevices(); }, []);
 
@@ -172,6 +183,24 @@ export function Settings() {
 
   function set<K extends keyof Settings>(key: K, value: Settings[K]) {
     setSettings(prev => ({ ...prev, [key]: value }));
+  }
+
+  async function loginYandex() {
+    if (!settings.yadiskClientId.trim()) {
+      alert('Введите Client ID приложения Яндекс');
+      return;
+    }
+    setYadiskAuthLoading(true);
+    try {
+      const result = await ipcRenderer.invoke('yadisk-auth', settings.yadiskClientId.trim());
+      if (result?.success && result.token) {
+        set('yadiskToken', result.token);
+      } else if (result?.error && result.error !== 'Окно закрыто') {
+        alert(result.error);
+      }
+    } finally {
+      setYadiskAuthLoading(false);
+    }
   }
 
   function setHotkey(key: keyof Settings['hotkeys'], value: string) {
@@ -281,6 +310,22 @@ export function Settings() {
                 ))}
               </div>
             </div>
+            <div className="sp-field">
+              <label>Формат видео</label>
+              <div className="sp-radio-group">
+                <label className="sp-radio">
+                  <input type="radio" name="vidfmt" value="mp4" checked={settings.videoFormat === 'mp4'} onChange={() => set('videoFormat', 'mp4')} />
+                  <span>MP4 — широкая совместимость</span>
+                </label>
+                <label className="sp-radio">
+                  <input type="radio" name="vidfmt" value="webm" checked={settings.videoFormat === 'webm'} onChange={() => set('videoFormat', 'webm')} />
+                  <span>WebM — без конвертации</span>
+                </label>
+              </div>
+              {settings.videoFormat === 'mp4' && (
+                <span className="sp-small">После записи выполняется конвертация через ffmpeg (~несколько секунд)</span>
+              )}
+            </div>
             <div className="sp-audio-section">
               <div className="sp-audio-row">
                 <span className="sp-audio-label">Микрофон</span>
@@ -315,18 +360,89 @@ export function Settings() {
       case 'server':
         return (
           <div className="sp-body">
-            <h2 className="sp-title">Загрузка на сервер</h2>
-            <div className="sp-field">
-              <label>Адрес сервера</label>
-              <input type="text" value={settings.serverUrl} onChange={e => set('serverUrl', e.target.value)} placeholder="http://192.168.1.100:8080" />
+            <h2 className="sp-title">Загрузка</h2>
+
+            <div className="sp-upload-block sp-upload-block--yadisk">
+              <div className="sp-upload-block-header">
+                <svg className="sp-yadisk-icon" viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+                  <path d="M13.4 2C9.7 2 7 4.7 7 8.3c0 2.4 1.2 4.4 3.1 5.6L7 22h2.6l2.4-6.2c.5.1.9.1 1.4.1 3.7 0 6.4-2.7 6.4-6.4C19.8 5.9 17.1 2 13.4 2zm0 10.8c-2.4 0-4.2-1.9-4.2-4.5s1.8-4.5 4.2-4.5 4.2 1.9 4.2 4.5-1.8 4.5-4.2 4.5z"/>
+                </svg>
+                <span className="sp-upload-block-title">Яндекс Диск</span>
+              </div>
+
+              {settings.yadiskToken ? (
+                <div className="sp-yadisk-authed">
+                  <div className="sp-yadisk-authed-status">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                    Аккаунт подключён
+                  </div>
+                  <button className="sp-yadisk-logout" onClick={() => { set('yadiskToken', ''); set('yadiskAutoUpload', false); }}>
+                    Отключить
+                  </button>
+                </div>
+              ) : (
+                <div className="sp-field">
+                  <label>Client ID приложения</label>
+                  <input
+                    type="text"
+                    value={settings.yadiskClientId}
+                    onChange={e => set('yadiskClientId', e.target.value)}
+                    placeholder="Вставьте Client ID"
+                  />
+                  <span className="sp-small">
+                    Создайте приложение на{' '}
+                    <a
+                      href="#"
+                      onClick={e => { e.preventDefault(); require('electron').shell.openExternal('https://oauth.yandex.ru/client/new'); }}
+                      className="sp-link"
+                    >
+                      oauth.yandex.ru
+                    </a>
+                    {' '}→ Доступы: Яндекс Диск (чтение + запись)
+                  </span>
+                  <button
+                    className="sp-yadisk-login-btn"
+                    onClick={loginYandex}
+                    disabled={yadiskAuthLoading || !settings.yadiskClientId.trim()}
+                  >
+                    {yadiskAuthLoading ? 'Открываю окно входа...' : '🔑 Войти через Яндекс'}
+                  </button>
+                </div>
+              )}
+
+              <div className="sp-field">
+                <label>Папка на диске</label>
+                <input
+                  type="text"
+                  value={settings.yadiskFolder}
+                  onChange={e => set('yadiskFolder', e.target.value)}
+                  placeholder="/Skrinshot"
+                />
+              </div>
+              <div className="sp-row">
+                <div className="sp-row-label">Автоматически загружать после создания</div>
+                <Toggle checked={settings.yadiskAutoUpload} onChange={v => set('yadiskAutoUpload', v)} />
+              </div>
             </div>
-            <div className="sp-field">
-              <label>Bearer Token</label>
-              <input type="password" value={settings.bearerToken} onChange={e => set('bearerToken', e.target.value)} placeholder="Токен авторизации (опционально)" />
-            </div>
-            <div className="sp-row">
-              <div className="sp-row-label">Автоматически загружать после создания</div>
-              <Toggle checked={settings.autoUpload} onChange={v => set('autoUpload', v)} />
+
+            <div className="sp-upload-block">
+              <div className="sp-upload-block-header">
+                <span className="sp-upload-block-title">Свой сервер</span>
+              </div>
+              <div className="sp-field">
+                <label>Адрес сервера</label>
+                <input type="text" value={settings.serverUrl} onChange={e => set('serverUrl', e.target.value)} placeholder="http://192.168.1.100:8080" />
+              </div>
+              <div className="sp-field">
+                <label>Bearer Token</label>
+                <input type="password" value={settings.bearerToken} onChange={e => set('bearerToken', e.target.value)} placeholder="Токен авторизации (опционально)" />
+              </div>
+              <div className="sp-row">
+                <div className="sp-row-label">Автоматически загружать после создания</div>
+                <Toggle checked={settings.autoUpload} onChange={v => set('autoUpload', v)} />
+              </div>
             </div>
           </div>
         );

@@ -555,21 +555,11 @@
     }
   });
 
-  document.getElementById('uploadBtn').addEventListener('click', async function() {
+  document.getElementById('uploadBtn').addEventListener('click', function() {
     if (!tempVideoPath) return;
-    disableActions();
-    setStatus('Загрузка на сервер...');
-    var res = await ipcRenderer.invoke('upload-video', tempVideoPath);
-    if (res && res.success) {
-      try { await navigator.clipboard.writeText(res.url); } catch(e) {}
-      setStatus('Загружено! Ссылка скопирована: ' + res.url);
-      setTimeout(function() { ipcRenderer.send('close-recording-window'); }, 2000);
-    } else {
-      setStatus('Ошибка: ' + (res && res.error ? res.error : 'неизвестная ошибка'));
-      document.getElementById('saveBtn').disabled   = false;
-      document.getElementById('uploadBtn').disabled = false;
-      document.getElementById('discardBtn').disabled = false;
-    }
+    // Запускаем загрузку в фоне — URL скопируется в буфер по завершении
+    ipcRenderer.invoke('upload-video', tempVideoPath);
+    ipcRenderer.send('close-recording-window');
   });
 
   document.getElementById('discardBtn').addEventListener('click', async function() {

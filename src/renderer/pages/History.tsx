@@ -26,6 +26,7 @@ export function History() {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState<string | null>(null);
+  const [uploadWarning, setUploadWarning] = useState<string | null>(null);
 
   useEffect(() => {
     load();
@@ -58,10 +59,15 @@ export function History() {
   }
 
   async function uploadItem(item: HistoryItem) {
+    setUploadWarning(null);
     setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'uploading' } : i));
     const result = await ipcRenderer.invoke('retry-upload', item.localPath);
-    if (result?.success) load();
-    else setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'failed' } : i));
+    if (result?.success) {
+      load();
+    } else {
+      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: item.status } : i));
+      if (result?.error) setUploadWarning(result.error);
+    }
   }
 
   function copyUrl(url: string, id: string) {
@@ -89,6 +95,11 @@ export function History() {
 
   return (
     <div className="history">
+      {uploadWarning && (
+        <div className="history-warning" onClick={() => setUploadWarning(null)}>
+          ⚠ {uploadWarning}
+        </div>
+      )}
       <table className="history-table">
         <thead>
           <tr>
